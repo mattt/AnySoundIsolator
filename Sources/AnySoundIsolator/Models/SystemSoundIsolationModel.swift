@@ -19,8 +19,11 @@ import AudioToolbox
 ///   ``SoundIsolationError/unsupportedConfiguration(_:)``.
 /// - **Mono and stereo.** One or two channels go to the audio unit together.
 ///   The unit processes two channels jointly, so the left output depends on the right input.
-/// - **More channels.** With three or more channels,
-///   each channel is isolated separately with its own audio unit.
+/// - **More channels.** With three or more channels, the model takes one channel,
+///   and ``IsolationOptions/channelPolicy`` applies:
+///   by default the isolator averages the channels and isolates the voice once,
+///   and with ``IsolationOptions/ChannelPolicy/perChannel``
+///   each channel has its own audio unit.
 ///
 /// The audio unit delays its output by about 93 ms in high quality and 56 ms in standard quality,
 /// and by more for stereo.
@@ -79,7 +82,7 @@ public struct SystemSoundIsolationModel: SoundIsolationModel {
                 "This system has no sound isolation audio unit."
             )
         }
-        // The unit takes one or two channels. For more, the isolator makes an executor for each channel.
+        // The unit takes one or two channels. For more, the isolator applies its channel policy.
         return try SystemSoundIsolationExecutor(
             sampleRate: request.sampleRate,
             channelCount: request.channelCount <= 2 ? request.channelCount : 1,

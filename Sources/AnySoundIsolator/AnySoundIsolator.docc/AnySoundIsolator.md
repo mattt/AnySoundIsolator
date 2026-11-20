@@ -13,10 +13,10 @@ let isolator = SoundIsolator()
 try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
-Give the isolator a file with ``SoundIsolator/isolate(contentsOf:to:background:progress:)``,
-one buffer with ``SoundIsolator/isolate(_:isolation:)``,
-or a sequence of audio with ``SoundIsolator/streamIsolation(of:)``.
-``SoundIsolator/streamIsolation(contentsOf:)`` reads a file
+Give the isolator a file with ``SoundIsolator/isolate(contentsOf:to:background:options:progress:)``,
+one buffer with ``SoundIsolator/isolate(_:options:isolation:)``,
+or a sequence of audio with ``SoundIsolator/streamIsolation(of:options:)``.
+``SoundIsolator/streamIsolation(contentsOf:options:)`` reads a file
 and returns results while the file is processed.
 
 Every model gives output with the same properties.
@@ -30,6 +30,13 @@ the sound that was removed is the input minus the output.
 ``IsolatedAudio`` carries the matching input frames
 and computes the background and a mix of the two.
 
+When the input has more channels than the engine takes,
+``IsolationOptions/channelPolicy`` selects what the isolator does.
+By default it averages the channels, isolates the sound once,
+and puts the result in every channel of the output,
+so a mono engine does the same work for a stereo recording as for a mono one.
+The background of each channel is still that channel's input minus the output.
+
 A model that needs files installs them through an ``AssetInstallationRequest``,
 which ``SoundIsolator/assetInstallationRequest()`` returns.
 Isolation never downloads.
@@ -39,6 +46,7 @@ Isolation never downloads.
 ### Isolation
 
 - ``SoundIsolator``
+- ``IsolationOptions``
 - ``IsolatedAudio``
 - ``IsolationStream``
 

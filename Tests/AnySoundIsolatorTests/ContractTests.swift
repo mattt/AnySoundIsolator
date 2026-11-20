@@ -53,21 +53,88 @@ import Testing
         #expect(TestAudio.level(difference) < 0.05 * TestAudio.level(Array(input[middle])))
     }
 
-    @Test func oneChannelEngineProcessesEachChannel() async throws {
+    @Test func oneChannelEngineProcessesEachChannelWhenAsked() async throws {
         let channels = (1 ... 3).map { TestAudio.voice(seconds: 0.5, seed: UInt64($0)) }
-        let isolator = SoundIsolator(model: StandInModel(latency: 50))
-        let audio = try await isolator.isolate(try TestAudio.buffer(channels))
+        let executors = Counter()
+        let isolator = SoundIsolator(model: StandInModel(latency: 50, executors: executors))
+        let audio = try await isolator.isolate(
+            try TestAudio.buffer(channels),
+            options: IsolationOptions(channelPolicy: .perChannel)
+        )
 
         #expect(audio.buffer.format.channelCount == 3)
         #expect(TestAudio.channels(audio.buffer) == channels.map { channel in channel.map { $0 * 0.5 } })
+        #expect(await executors.value == 3)
+    }
+
+    @Test(arguments: [2, 3])
+    func oneChannelEngineGetsADownmixByDefault(channelCount: Int) async throws {
+        let channels = (1 ... channelCount).map { TestAudio.voice(seconds: 0.5, seed: UInt64($0)) }
+        let executors = Counter()
+        let isolator = SoundIsolator(model: StandInModel(gain: 0.5, latency: 50, blockSize: 700, executors: executors))
+        #expect(IsolationOptions().channelPolicy == .downmix)
+        let result = try await TestAudio.collect(
+            isolator.streamIsolation(of: Buffers(try TestAudio.buffers(channels, size: 1_000)))
+        )
+
+        // The engine ran once, on the average of the channels.
+        #expect(await executors.value == 1)
+        let scale = 1 / Float(channelCount)
+        let average = channels[0].indices.map { index in
+            channels.reduce(Float(0)) { $0 + $1[index] } * scale
+        }
+        // The output has the input's channels, each with the one result, and the source is unchanged.
+        #expect(result.isolated == Array(repeating: average.map { $0 * 0.5 }, count: channelCount))
+        #expect(result.source == channels)
+    }
+
+    @Test func backgroundAfterADownmixKeepsEachChannel() async throws {
+        let channels = (1 ... 2).map { TestAudio.voice(seconds: 0.5, seed: UInt64($0)) }
+        let audio = try await SoundIsolator(model: StandInModel(gain: 1)).isolate(try TestAudio.buffer(channels))
+        let isolated = TestAudio.channels(audio.buffer)
+        let background = TestAudio.channels(audio.background())
+        let restored = TestAudio.channels(audio.mixed(backgroundLevel: 1))
+
+        #expect(isolated[0] == isolated[1])
+        for channel in 0 ..< 2 {
+            // In each channel, the isolated sound and the background add up to the source.
+            let sum = zip(isolated[channel], background[channel]).map { $0 + $1 }
+            #expect(TestAudio.maximumDifference(sum, channels[channel]) < 1e-6)
+            #expect(TestAudio.maximumDifference(restored[channel], channels[channel]) < 1e-6)
+        }
+        // An engine that returns its input removes nothing from the average,
+        // so the background is what differs between the channels: half of left minus right.
+        let side = zip(channels[0], channels[1]).map { ($0 - $1) / 2 }
+        #expect(TestAudio.maximumDifference(background[0], side) < 1e-6)
+        #expect(TestAudio.maximumDifference(background[1], side.map { -$0 }) < 1e-6)
+    }
+
+    @Test func downmixAtAnotherSampleRateStaysOnTheTimeline() async throws {
+        let channels = (1 ... 2).map { TestAudio.voice(seconds: 2, sampleRate: 16_000, seed: UInt64($0)) }
+        let isolator = SoundIsolator(model: StandInModel(sampleRate: 48_000, gain: 1, latency: 480))
+        let audio = try await isolator.isolate(try TestAudio.buffer(channels, sampleRate: 16_000))
+        let isolated = TestAudio.channels(audio.buffer)
+        let average = zip(channels[0], channels[1]).map { ($0 + $1) / 2 }
+
+        #expect(isolated[0].count == average.count)
+        #expect(isolated[0] == isolated[1])
+        #expect(Alignment.lag(of: isolated[0], behind: average, maximumLag: 500) == 0)
     }
 
     @Test func engineThatTakesEveryChannelGetsOneExecutor() async throws {
         let channels = (1 ... 2).map { TestAudio.voice(seconds: 0.5, seed: UInt64($0)) }
-        let isolator = SoundIsolator(model: StandInModel(channelCount: nil))
-        let audio = try await isolator.isolate(try TestAudio.buffer(channels))
+        // The channel policy does not apply to an engine that takes all of the channels.
+        for policy in IsolationOptions.ChannelPolicy.allCases {
+            let executors = Counter()
+            let isolator = SoundIsolator(model: StandInModel(channelCount: nil, executors: executors))
+            let audio = try await isolator.isolate(
+                try TestAudio.buffer(channels),
+                options: IsolationOptions(channelPolicy: policy)
+            )
 
-        #expect(TestAudio.channels(audio.buffer) == channels.map { channel in channel.map { $0 * 0.5 } })
+            #expect(TestAudio.channels(audio.buffer) == channels.map { channel in channel.map { $0 * 0.5 } })
+            #expect(await executors.value == 1)
+        }
     }
 
     @Test func backgroundAndMixComeFromTheSource() async throws {
@@ -100,7 +167,7 @@ import Testing
         for (index, value) in [16_384, -16_384, 8_192, -8_192, 0, 0, 32_767, -32_768].enumerated() {
             samples[index] = Int16(value)
         }
-        let audio = try await SoundIsolator(model: StandInModel(gain: 1)).isolate(buffer)
+        let audio = try await SoundIsolator(model: StandInModel(channelCount: nil, gain: 1)).isolate(buffer)
 
         #expect(audio.buffer.format.sampleRate == 16_000)
         #expect(audio.buffer.format.commonFormat == .pcmFormatFloat32)

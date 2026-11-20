@@ -2,7 +2,8 @@ import AVFoundation
 
 /// Isolated sound that arrives while the isolator reads a sequence of audio.
 ///
-/// ``SoundIsolator/streamIsolation(of:)`` and ``SoundIsolator/streamIsolation(contentsOf:)``
+/// ``SoundIsolator/streamIsolation(of:options:)`` and
+/// ``SoundIsolator/streamIsolation(contentsOf:options:)``
 /// return this type.
 /// The stream does no work until you iterate it.
 /// Each iteration reads the source from its start with a new executor,
@@ -27,12 +28,13 @@ where Source.Element == AudioInput {
     let source: Source
     let model: any SoundIsolationModel
     let sound: SoundIsolator.Sound
+    let options: IsolationOptions
 
     /// Creates an iterator with a new executor that reads the source from its start.
     public func makeAsyncIterator() -> AsyncIterator {
         AsyncIterator(
             source: source.makeAsyncIterator(),
-            pipeline: IsolationPipeline(model: model, sound: sound)
+            pipeline: IsolationPipeline(model: model, sound: sound, options: options)
         )
     }
 

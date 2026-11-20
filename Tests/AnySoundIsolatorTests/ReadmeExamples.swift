@@ -42,6 +42,12 @@ enum ReadmeExamples {
         }
     }
 
+    static func isolateEachChannel(interview: URL, voices: URL) async throws {
+        let isolator = SoundIsolator()
+        let options = IsolationOptions(channelPolicy: .perChannel)
+        try await isolator.isolate(contentsOf: interview, to: voices, options: options)
+    }
+
     static func mix(audio: IsolatedAudio) {
         let background = audio.background()
         let mostlyVoice = audio.mixed(backgroundLevel: 0.25)

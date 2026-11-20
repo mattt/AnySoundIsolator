@@ -36,10 +36,13 @@ public protocol SoundIsolationModel: Sendable {
     /// Makes an executor for one stream of audio.
     ///
     /// The executor chooses the sample rate and channel count that it works in.
-    /// If they differ from the request, the isolator converts the audio:
-    /// it resamples to and from the executor's rate,
-    /// and when the executor takes one channel and the input has more,
-    /// it calls this method once for each channel.
+    /// If they differ from the request, the isolator converts the audio.
+    /// It resamples to and from the executor's rate.
+    /// When the executor takes one channel and the input has more,
+    /// ``IsolationOptions/channelPolicy`` decides what the executor receives:
+    /// the average of the channels, which is the default,
+    /// or one channel, in which case the isolator calls this method once for each channel.
+    /// An executor never sees which of the two it serves.
     ///
     /// - Parameter request: The sound to isolate and the format of the input.
     /// - Returns: An executor with no audio in it.

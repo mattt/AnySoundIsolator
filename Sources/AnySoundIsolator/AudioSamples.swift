@@ -60,6 +60,19 @@ extension AudioSamples {
         return head
     }
 
+    /// Returns one channel that is the average of the channels.
+    func downmixed() -> AudioSamples {
+        guard channelCount > 1 else { return self }
+        var average = channels[0]
+        for channel in channels.dropFirst() {
+            for index in average.indices {
+                average[index] += channel[index]
+            }
+        }
+        let scale = 1 / Float(channelCount)
+        return AudioSamples(channels: [average.map { $0 * scale }])
+    }
+
     /// Pads with silence or trims the end, so that the audio has a given number of frames.
     mutating func resize(to count: Int) {
         for index in channels.indices {

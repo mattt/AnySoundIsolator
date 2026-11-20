@@ -17,6 +17,11 @@ import Foundation
 /// - Frame `n` of the output corresponds to frame `n` of the input.
 ///   The isolator removes an engine's delay, so you never correct for it.
 ///
+/// When the input has more channels than the engine takes,
+/// ``IsolationOptions/channelPolicy`` selects what the isolator does.
+/// By default it isolates the sound in the average of the channels
+/// and puts that one result in every channel of the output.
+///
 /// Because of this, the sound that the isolator removed is the input minus the output.
 /// ``IsolatedAudio`` provides the removed background and a mix of the two.
 ///
@@ -105,6 +110,7 @@ public struct SoundIsolator: Sendable {
     ///   - destination: The location for the isolated sound.
     ///   - background: The location for the sound that was removed, or `nil` to not write it.
     ///     At each frame, the two files add up to the source.
+    ///   - options: Options for this file, such as the channel policy.
     ///   - progress: A progress object to update.
     ///     The isolator sets its total to the number of frames in the source.
     /// - Throws: A ``SoundIsolationError``, or `CancellationError`.
@@ -112,6 +118,7 @@ public struct SoundIsolator: Sendable {
         contentsOf source: URL,
         to destination: URL,
         background: URL? = nil,
+        options: IsolationOptions = IsolationOptions(),
         progress: Progress? = nil
     ) async throws {
         let destinations = [destination] + (background.map { [$0] } ?? [])
@@ -136,7 +143,7 @@ public struct SoundIsolator: Sendable {
                 isolatedFile.close()
                 backgroundFile?.close()
             }
-            for try await audio in streamIsolation(contentsOf: source) {
+            for try await audio in streamIsolation(contentsOf: source, options: options) {
                 do {
                     try isolatedFile.write(from: audio.buffer)
                     try backgroundFile?.write(from: audio.background())
@@ -158,10 +165,15 @@ public struct SoundIsolator: Sendable {
     /// Use this method to play, show, or save the start of a long recording
     /// before the isolator reaches its end.
     ///
-    /// - Parameter source: The location of a file that `AVAudioFile` reads.
+    /// - Parameters:
+    ///   - source: The location of a file that `AVAudioFile` reads.
+    ///   - options: Options for this file, such as the channel policy.
     /// - Returns: A stream that reads the file when you iterate it.
-    public func streamIsolation(contentsOf source: URL) -> IsolationStream<AudioFileBuffers> {
-        streamIsolation(of: AudioFileBuffers(url: source))
+    public func streamIsolation(
+        contentsOf source: URL,
+        options: IsolationOptions = IsolationOptions()
+    ) -> IsolationStream<AudioFileBuffers> {
+        streamIsolation(of: AudioFileBuffers(url: source), options: options)
     }
 
     // MARK: - Buffers
@@ -181,29 +193,34 @@ public struct SoundIsolator: Sendable {
     /// }
     /// ```
     ///
-    /// - Parameter audio: The input, in order.
+    /// - Parameters:
+    ///   - audio: The input, in order.
+    ///   - options: Options for this stream, such as the channel policy.
     /// - Returns: A stream that reads the input when you iterate it.
     public func streamIsolation<Source: AsyncSequence>(
-        of audio: Source
+        of audio: Source,
+        options: IsolationOptions = IsolationOptions()
     ) -> IsolationStream<Source> where Source.Element == AudioInput {
-        IsolationStream(source: audio, model: model, sound: sound)
+        IsolationStream(source: audio, model: model, sound: sound, options: options)
     }
 
     /// Isolates the sound in one buffer.
     ///
     /// Use this method for audio that is already in memory.
     /// The isolator reads the buffer before the method first suspends.
-    /// For live audio, use ``streamIsolation(of:)``:
+    /// For live audio, use ``streamIsolation(of:options:)``:
     /// separate calls to this method do not share an engine's state,
     /// so the output would be wrong at each boundary between buffers.
     ///
     /// - Parameters:
     ///   - buffer: Audio in any PCM format.
+    ///   - options: Options for this buffer, such as the channel policy.
     ///   - actor: The actor that the caller runs on. Leave the default.
     /// - Returns: The isolated sound and the source, both as long as the buffer.
     /// - Throws: A ``SoundIsolationError``, or `CancellationError`.
     public func isolate(
         _ buffer: AVAudioPCMBuffer,
+        options: IsolationOptions = IsolationOptions(),
         isolation actor: isolated (any Actor)? = #isolation
     ) async throws -> IsolatedAudio {
         var intake = Intake()
@@ -211,7 +228,7 @@ public struct SoundIsolator: Sendable {
         let sampleRate = buffer.format.sampleRate
         let format = try PCM.floatFormat(matching: buffer.format)
 
-        let pipeline = IsolationPipeline(model: model, sound: sound)
+        let pipeline = IsolationPipeline(model: model, sound: sound, options: options)
         var pieces = try await pipeline.process(samples, sampleRate: sampleRate)
         try Task.checkCancellation()
         pieces += try await pipeline.finish()

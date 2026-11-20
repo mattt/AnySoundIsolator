@@ -244,12 +244,15 @@ struct StandInModel: SoundIsolationModel {
     var extraFrames = 0
     var sounds: Set<SoundIsolator.Sound> = [.voice]
     var failure: (any Error & Sendable)? = nil
+    /// Counts the executors that the model makes.
+    var executors: Counter? = nil
 
     var availability: Availability<Never> { .available }
     var supportedSounds: Set<SoundIsolator.Sound> { sounds }
 
     func makeExecutor(for request: SoundIsolationRequest) async throws -> any SoundIsolationExecutor {
         if let failure { throw failure }
+        await executors?.increment()
         return StandInExecutor(
             sampleRate: sampleRate ?? request.sampleRate,
             channelCount: channelCount ?? request.channelCount,

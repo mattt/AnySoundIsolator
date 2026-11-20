@@ -126,6 +126,37 @@ Keep two tracks, the original and the isolated sound,
 and set their volumes to `level` and `1 - level`,
 for example with an `AVAudioMix`.
 
+### Stereo input and a mono engine
+
+Some engines take one channel.
+When the input has more channels than the engine takes,
+the isolator averages the channels, isolates the sound once,
+and puts the result in every channel of the output.
+The engine then does the same work for a stereo recording as for a mono one.
+To isolate the sound in each channel separately instead,
+pass options with the `perChannel` policy:
+
+```swift
+let options = IsolationOptions(channelPolicy: .perChannel)
+try await isolator.isolate(contentsOf: interview, to: voices, options: options)
+```
+
+Use `perChannel` when the channels hold different sounds,
+such as an interview with one speaker in each channel.
+The engine's work grows with the number of channels.
+
+With either policy, the output has the input's channel count,
+and in each channel the isolated sound and the background add up to the source.
+After a downmix, the isolated sound is the same in every channel,
+so it has no stereo position,
+and the background of a channel is that channel's source minus the isolated sound.
+The background therefore keeps the differences between the channels,
+and a mix at a background level of 1 is still the source.
+
+The policy has no effect on an engine that takes all of the input's channels,
+such as the system model with stereo input.
+Every isolation method takes the same `options` parameter.
+
 ### Choose a model
 
 Pass a model when you create the isolator.
@@ -163,7 +194,10 @@ The model processes audio in the format that it arrives in:
   The unit processes two channels jointly:
   the left output depends on the right input,
   and a stereo file with two identical channels does not give the mono result.
-- **More channels.** Each channel is isolated separately, with its own audio unit.
+- **More channels.** With three or more channels, the model takes one channel,
+  so the [channel policy](#stereo-input-and-a-mono-engine) applies:
+  by default the isolator averages the channels and isolates the voice once,
+  and with `perChannel` each channel has its own audio unit.
 
 A live stream receives each frame of output later than its input by the delay in the table,
 because the audio unit needs that much audio after a frame to isolate it.
@@ -177,8 +211,9 @@ and returns audio when it has some.
 The isolator does the rest:
 
 - It resamples the input to the executor's sample rate, and the output back.
-- It makes one executor for each channel when the executor takes one channel
-  and the input has more.
+- When the executor takes one channel and the input has more,
+  it gives the executor the average of the channels,
+  or makes one executor for each channel, as the caller's `IsolationOptions` say.
 - It removes the latency from the start of the output
   and pads or trims the end to the input's length.
 - It reads and writes files, reports progress, and computes the background and the mix.
@@ -234,6 +269,8 @@ $ swift run hush status
 
 `isolate` is the default subcommand.
 `--background` also writes the sound that was removed.
+`--channel-policy perChannel` isolates each channel separately
+when the model takes fewer channels than the file has.
 `status` reports whether the model can run, without downloading.
 Run `swift run hush --help` for all options.
 

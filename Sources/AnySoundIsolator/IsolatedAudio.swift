@@ -14,6 +14,10 @@ import CoreMedia
 /// between ``buffer`` and ``source``.
 /// ``background()`` and ``mixed(backgroundLevel:)`` compute them.
 ///
+/// These relations hold in every channel, whatever the ``IsolationOptions/channelPolicy``.
+/// After a downmix, ``buffer`` has the same samples in every channel,
+/// and the background keeps the differences between the channels of ``source``.
+///
 /// The package makes the buffers and does not change them afterward.
 /// Do not change them if you share the value between tasks.
 public struct IsolatedAudio: @unchecked Sendable {

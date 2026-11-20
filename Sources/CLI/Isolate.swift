@@ -25,6 +25,11 @@ struct Isolate: CancellableCommand {
     )
     var background: String?
 
+    @Option(
+        help: "What to do when the input has more channels than the model takes."
+    )
+    var channelPolicy: IsolationOptions.ChannelPolicy = .downmix
+
     @OptionGroup(title: "Model Options") var model: ModelOptions
 
     @concurrent func execute() async throws {
@@ -35,6 +40,7 @@ struct Isolate: CancellableCommand {
             contentsOf: URL(fileURLWithPath: input),
             to: URL(fileURLWithPath: output),
             background: background.map { URL(fileURLWithPath: $0) },
+            options: IsolationOptions(channelPolicy: channelPolicy),
             progress: progress
         )
         let elapsed = clock.now - started

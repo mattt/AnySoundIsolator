@@ -17,6 +17,9 @@ actor IsolationPipeline {
     private struct Lane {
         let executor: any SoundIsolationExecutor
         let channels: Range<Int>
+        /// Whether the executor takes the average of the lane's channels
+        /// and its one channel of output goes to each of them.
+        let downmixes: Bool
         /// Resamples the input to the executor's rate, when the rates differ.
         let intoExecutor: StreamResampler?
         /// Resamples the executor's output to the input's rate.
@@ -29,6 +32,7 @@ actor IsolationPipeline {
 
     private let model: any SoundIsolationModel
     private let sound: SoundIsolator.Sound
+    private let options: IsolationOptions
     private var sampleRate: Double = 0
     private var lanes: [Lane] = []
     /// Input frames that have no output yet.
@@ -37,9 +41,10 @@ actor IsolationPipeline {
     private var delivered = 0
     private var isFinished = false
 
-    init(model: any SoundIsolationModel, sound: SoundIsolator.Sound) {
+    init(model: any SoundIsolationModel, sound: SoundIsolator.Sound, options: IsolationOptions) {
         self.model = model
         self.sound = sound
+        self.options = options
     }
 
     /// Takes the next frames of the input and returns the output that is ready.
@@ -56,6 +61,9 @@ actor IsolationPipeline {
         received += input.frameCount
         for index in lanes.indices {
             var samples = AudioSamples(channels: Array(input.channels[lanes[index].channels]))
+            if lanes[index].downmixes {
+                samples = samples.downmixed()
+            }
             if let resampler = lanes[index].intoExecutor {
                 samples = try resampler.convert(samples)
             }
@@ -99,8 +107,9 @@ actor IsolationPipeline {
         var executors: [any SoundIsolationExecutor]
         do {
             executors = [try await model.makeExecutor(for: request)]
-            // An executor for one channel processes one channel of the input.
-            if executors[0].channelCount == 1 {
+            // An executor for one channel processes the average of the channels,
+            // or one channel of the input, with an executor for each of the others.
+            if executors[0].channelCount == 1, options.channelPolicy == .perChannel {
                 for _ in 1 ..< channelCount {
                     executors.append(try await model.makeExecutor(for: request))
                 }
@@ -111,7 +120,10 @@ actor IsolationPipeline {
         var lanes: [Lane] = []
         for (index, executor) in executors.enumerated() {
             let channels = executors.count == 1 ? 0 ..< channelCount : index ..< index + 1
-            guard executor.channelCount == channels.count, executor.sampleRate > 0, executor.latency >= 0 else {
+            let downmixes = executor.channelCount == 1 && channels.count > 1
+            guard executor.channelCount == channels.count || downmixes, executor.sampleRate > 0,
+                executor.latency >= 0
+            else {
                 throw SoundIsolationError.invalidResult(
                     "The executor takes \(executor.channelCount) channels, and the input has \(channelCount)."
                 )
@@ -121,20 +133,21 @@ actor IsolationPipeline {
                 Lane(
                     executor: executor,
                     channels: channels,
+                    downmixes: downmixes,
                     intoExecutor: resamples
                         ? try StreamResampler(
                             from: sampleRate,
                             to: executor.sampleRate,
-                            channelCount: channels.count
+                            channelCount: executor.channelCount
                         ) : nil,
                     fromExecutor: resamples
                         ? try StreamResampler(
                             from: executor.sampleRate,
                             to: sampleRate,
-                            channelCount: channels.count
+                            channelCount: executor.channelCount
                         ) : nil,
                     latencyRemaining: executor.latency,
-                    ready: AudioSamples(channelCount: channels.count)
+                    ready: AudioSamples(channelCount: executor.channelCount)
                 )
             )
         }
@@ -158,9 +171,10 @@ actor IsolationPipeline {
 
     /// Removes the latency from an executor's output and converts it to the input's rate.
     private func accept(_ output: AudioSamples, lane index: Int) throws {
-        guard output.channelCount == lanes[index].channels.count else {
+        let expected = lanes[index].executor.channelCount
+        guard output.channelCount == expected else {
             throw SoundIsolationError.invalidResult(
-                "The executor returned \(output.channelCount) channels instead of \(lanes[index].channels.count)."
+                "The executor returned \(output.channelCount) channels instead of \(expected)."
             )
         }
         var output = output
@@ -182,7 +196,11 @@ actor IsolationPipeline {
         guard count > 0 else { return [] }
         var isolated: [[Float]] = []
         for index in lanes.indices {
-            isolated += lanes[index].ready.removeFirst(count).channels
+            let ready = lanes[index].ready.removeFirst(count).channels
+            // The one channel that came from a downmix goes to each channel of the output.
+            isolated +=
+                lanes[index].downmixes
+                ? Array(repeating: ready[0], count: lanes[index].channels.count) : ready
         }
         let piece = IsolatedSamples(
             isolated: AudioSamples(channels: isolated),

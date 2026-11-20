@@ -22,3 +22,4 @@ struct ModelOptions: ParsableArguments {
 }
 
 extension SystemSoundIsolationModel.Quality: ExpressibleByArgument {}
+extension IsolationOptions.ChannelPolicy: ExpressibleByArgument {}

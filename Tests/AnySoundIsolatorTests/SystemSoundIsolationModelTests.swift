@@ -52,10 +52,27 @@ struct SystemSoundIsolationModelTests {
         #expect(TestAudio.channels(audio.buffer) == input)
     }
 
-    @Test func threeChannelsAreIsolatedSeparately() async throws {
+    @Test func threeChannelsAreDownmixedByDefault() async throws {
         let input = (1 ... 3).map { TestAudio.voice(seconds: 1, seed: UInt64($0)) }
         let isolator = SoundIsolator()
         let together = try await isolator.isolate(try TestAudio.buffer(input))
+        let average = input[0].indices.map { (input[0][$0] + input[1][$0] + input[2][$0]) * (1 / Float(3)) }
+        let alone = try await isolator.isolate(try TestAudio.buffer([average]))
+
+        #expect(together.buffer.format.channelCount == 3)
+        #expect(TestAudio.channels(together.source) == input)
+        for channel in TestAudio.channels(together.buffer) {
+            #expect(channel == TestAudio.channels(alone.buffer)[0])
+        }
+    }
+
+    @Test func threeChannelsAreIsolatedSeparatelyWhenAsked() async throws {
+        let input = (1 ... 3).map { TestAudio.voice(seconds: 1, seed: UInt64($0)) }
+        let isolator = SoundIsolator()
+        let together = try await isolator.isolate(
+            try TestAudio.buffer(input),
+            options: IsolationOptions(channelPolicy: .perChannel)
+        )
         #expect(together.buffer.format.channelCount == 3)
 
         for (index, channel) in input.enumerated() {

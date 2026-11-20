@@ -31,7 +31,13 @@ import Testing
 
         let isolator = SoundIsolator(model: StandInModel(gain: 0.25, latency: 999, blockSize: 5_000))
         let progress = Progress()
-        try await isolator.isolate(contentsOf: source, to: voice, background: background, progress: progress)
+        try await isolator.isolate(
+            contentsOf: source,
+            to: voice,
+            background: background,
+            options: IsolationOptions(channelPolicy: .perChannel),
+            progress: progress
+        )
 
         let isolated = try await TestAudio.read(voice)
         let removed = try await TestAudio.read(background)
@@ -95,7 +101,11 @@ import Testing
         try TestAudio.write([input, input], to: source, sampleRate: 44_100)
         let decoded = try await TestAudio.read(source)
 
-        try await SoundIsolator(model: StandInModel(gain: 1)).isolate(contentsOf: source, to: voice)
+        try await SoundIsolator(model: StandInModel(gain: 1)).isolate(
+            contentsOf: source,
+            to: voice,
+            options: IsolationOptions(channelPolicy: .perChannel)
+        )
 
         #expect(try await TestAudio.read(voice) == decoded)
     }
@@ -108,9 +118,20 @@ import Testing
         let input = (1 ... 4).map { TestAudio.voice(seconds: 0.5, seed: UInt64($0)) }
         try TestAudio.write(input, to: source)
 
-        try await SoundIsolator(model: StandInModel(gain: 0.5)).isolate(contentsOf: source, to: voice)
-
+        let isolator = SoundIsolator(model: StandInModel(gain: 0.5))
+        try await isolator.isolate(
+            contentsOf: source,
+            to: voice,
+            options: IsolationOptions(channelPolicy: .perChannel)
+        )
         #expect(try await TestAudio.read(voice) == input.map { channel in channel.map { $0 * 0.5 } })
+
+        // By default, the four channels of the output hold the one result of the downmix.
+        try await isolator.isolate(contentsOf: source, to: voice)
+        let downmixed = try await TestAudio.read(voice)
+        #expect(downmixed.count == 4)
+        #expect(downmixed.allSatisfy { $0 == downmixed[0] })
+        #expect(downmixed[0].count == input[0].count)
     }
 
     @Test func sourceIsNeverADestination() async throws {
