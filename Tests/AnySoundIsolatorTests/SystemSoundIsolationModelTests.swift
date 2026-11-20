@@ -58,14 +58,17 @@ struct SystemSoundIsolationModelTests {
     func stereoOutputIsOnTheInputTimeline(quality: Quality) async throws {
         let input = [TestAudio.voice(seconds: 3, seed: 1), TestAudio.voice(seconds: 3, seed: 2)]
         let isolator = SoundIsolator(model: SystemSoundIsolationModel(quality: quality))
-        let audio = try await isolator.isolate(try TestAudio.buffer(input))
-        let isolated = TestAudio.channels(audio.buffer)
+        // On some virtual machines the stereo unit does not always start; see the helper.
+        try await TestAudio.withKnownStartFailure {
+            let audio = try await isolator.isolate(try TestAudio.buffer(input))
+            let isolated = TestAudio.channels(audio.buffer)
 
-        #expect(isolated.count == 2)
-        for channel in 0 ..< 2 {
-            #expect(isolated[channel].count == input[channel].count)
-            let lag = Alignment.lag(of: isolated[channel], behind: input[channel], maximumLag: 2_400)
-            #expect(abs(lag) <= 1)
+            #expect(isolated.count == 2)
+            for channel in 0 ..< 2 {
+                #expect(isolated[channel].count == input[channel].count)
+                let lag = Alignment.lag(of: isolated[channel], behind: input[channel], maximumLag: 2_400)
+                #expect(abs(lag) <= 1)
+            }
         }
     }
 
@@ -75,10 +78,47 @@ struct SystemSoundIsolationModelTests {
     func reportedDelayIsRemovedExactly(quality: Quality, channelCount: Int) async throws {
         let input = (1 ... channelCount).map { TestAudio.voice(seconds: 1, seed: UInt64($0)) }
         let isolator = SoundIsolator(model: UnprocessedModel(quality: quality))
-        let audio = try await isolator.isolate(try TestAudio.buffer(input))
+        // On some virtual machines the stereo unit does not always start; see the helper.
+        try await TestAudio.withKnownStartFailure {
+            let audio = try await isolator.isolate(try TestAudio.buffer(input))
 
-        let output = TestAudio.channels(audio.buffer)
-        #expect(output == input, TestAudio.difference(output, input))
+            let output = TestAudio.channels(audio.buffer)
+            #expect(output == input, TestAudio.difference(output, input))
+        }
+    }
+
+    /// A unit that fails to start is tried three times, and a refused format is an error at once.
+    @Test func unitThatFailsToStartIsTriedAgain() throws {
+        var calls = 0
+        let attempts = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            calls += 1
+            return calls < 3 ? kAudioUnitErr_FailedInitialization : noErr
+        }
+        #expect(attempts == 3)
+
+        calls = 0
+        #expect {
+            _ = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+                calls += 1
+                return kAudioUnitErr_FailedInitialization
+            }
+        } throws: { error in
+            guard case SoundIsolationError.backendFailure(let underlying) = error else { return false }
+            return (underlying as NSError).code == Int(kAudioUnitErr_FailedInitialization)
+        }
+        #expect(calls == 3)
+
+        calls = 0
+        #expect {
+            _ = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+                calls += 1
+                return kAudioUnitErr_FormatNotSupported
+            }
+        } throws: { error in
+            guard case SoundIsolationError.unsupportedConfiguration = error else { return false }
+            return true
+        }
+        #expect(calls == 1)
     }
 
     @Test func threeChannelsAreDownmixedByDefault() async throws {

@@ -1,5 +1,6 @@
 import AVFoundation
 import AudioToolbox
+import Synchronization
 
 /// One instance of the system's sound isolation audio unit, driven through the Audio Unit C API.
 ///
@@ -36,6 +37,25 @@ final class SoundIsolationUnit {
 
     /// The frames by which the output trails the input, as the unit reports, rounded to a whole frame.
     let latency: Int
+
+    /// The number of calls to `AudioUnitInitialize` that the unit needed, 1 unless a call failed.
+    let initializationAttempts: Int
+
+    /// The units of the process: those in use, and those that wait for their disposal or are in it.
+    struct Census: Equatable {
+        var inUse = 0
+        var inDisposal = 0
+    }
+
+    /// The count of the units of the process, for diagnostics.
+    static var census: Census { counts.withLock { $0 } }
+
+    private static let counts = Mutex(Census())
+
+    /// Waits until every unit that was released has been disposed of.
+    static func waitForDisposals() {
+        disposal.sync {}
+    }
 
     private let unit: AudioUnit
     private let channelCount: Int
@@ -128,14 +148,8 @@ final class SoundIsolationUnit {
                     0
                 )
             )
-            // The messages name the step and the status,
-            // so that a refused format and a unit that failed to start are different in a report.
-            let status = AudioUnitInitialize(unit)
-            guard status == noErr else {
-                throw SoundIsolationError.unsupportedConfiguration(
-                    "The sound isolation audio unit does not accept \(channelCount) channels "
-                        + "at \(sampleRate) Hz (initialization, status \(status))."
-                )
+            self.initializationAttempts = try Self.start(sampleRate: sampleRate, channelCount: channelCount) {
+                AudioUnitInitialize(unit)
             }
             // The unit knows its latency after it is initialized with a format.
             var seconds: Float64 = 0
@@ -157,6 +171,55 @@ final class SoundIsolationUnit {
         self.channelCount = channelCount
         self.feed = feed
         self.output = output
+        Self.counts.withLock { $0.inUse += 1 }
+    }
+
+    /// The waits before the second and third calls to `AudioUnitInitialize`, in seconds.
+    private static let initializationRetryDelays = [0.05, 0.25]
+
+    /// Initializes a unit with a closure that calls `AudioUnitInitialize`,
+    /// and returns the number of calls that it took.
+    ///
+    /// The unit can fail to start with `kAudioUnitErr_FailedInitialization` for a format that it supports.
+    /// On virtual machines with macOS 27, this occurred for two channels at 48 kHz with high quality
+    /// in two of four CI runs, while other tests made and disposed of units in the same process.
+    /// The cause is unknown, and nobody has seen a second call succeed.
+    /// The method waits for the disposals of released units and tries again, twice.
+    /// When the unit cannot start at all, this blocks the caller's thread for 0.3 seconds more before the error.
+    /// Any other status is an error at once.
+    ///
+    /// - Throws: ``SoundIsolationError/unsupportedConfiguration(_:)`` when the unit refuses the format,
+    ///   or ``SoundIsolationError/backendFailure(underlying:)`` when the unit fails to start three times.
+    static func start(sampleRate: Double, channelCount: Int, _ initialize: () -> OSStatus) throws -> Int {
+        var attempts = 0
+        while true {
+            let status = initialize()
+            attempts += 1
+            if status == noErr { return attempts }
+            // The messages name the step and the status,
+            // so that a refused format and a unit that failed to start are different in a report.
+            guard status == kAudioUnitErr_FailedInitialization else {
+                throw SoundIsolationError.unsupportedConfiguration(
+                    "The sound isolation audio unit does not accept \(channelCount) channels "
+                        + "at \(sampleRate) Hz (initialization, status \(status))."
+                )
+            }
+            guard attempts <= initializationRetryDelays.count else {
+                throw SoundIsolationError.backendFailure(
+                    underlying: NSError(
+                        domain: NSOSStatusErrorDomain,
+                        code: Int(status),
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "The sound isolation audio unit failed to start \(attempts) times "
+                                + "for \(channelCount) channels at \(sampleRate) Hz (status \(status))."
+                        ]
+                    )
+                )
+            }
+            waitForDisposals()
+            Thread.sleep(forTimeInterval: initializationRetryDelays[attempts - 1])
+        }
     }
 
     /// The queue that disposes of units.
@@ -169,9 +232,14 @@ final class SoundIsolationUnit {
 
     deinit {
         nonisolated(unsafe) let unit = unit
+        Self.counts.withLock {
+            $0.inUse -= 1
+            $0.inDisposal += 1
+        }
         Self.disposal.async {
             AudioUnitUninitialize(unit)
             AudioComponentInstanceDispose(unit)
+            Self.counts.withLock { $0.inDisposal -= 1 }
         }
     }
 
@@ -225,6 +293,8 @@ final class SoundIsolationUnit {
     }
 
     /// Calls `AudioUnitRender` from a fixed position of the stack within 64 bytes.
+    ///
+    /// Apple has a report of the dependence that follows, with the number FB25659939.
     ///
     /// The unit's output depends on that position.
     /// On macOS 27 with an Apple M4 Max, the same samples gave three different outputs,
