@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 import Testing
 
 @testable import AnySoundIsolator
@@ -163,8 +164,7 @@ import Testing
         await #expect(throws: SoundIsolationError.self) {
             try await isolator.isolate(contentsOf: source, to: voice, background: background)
         }
-        #expect(!FileManager.default.fileExists(atPath: voice.path))
-        #expect(!FileManager.default.fileExists(atPath: background.path))
+        #expect(try Self.names(in: directory) == ["source.wav"])
 
         // An output type that the isolator cannot write is an error before any work.
         await #expect {
@@ -181,5 +181,213 @@ import Testing
             guard case SoundIsolationError.invalidAudio = error else { return false }
             return true
         }
+        #expect(try Self.names(in: directory) == ["source.wav"])
+    }
+
+    // MARK: - Existing files at the destinations
+
+    /// The names of everything in a directory, hidden files included, in order.
+    private static func names(in directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    }
+
+    /// A directory with a source of two seconds and some text for a file that must not change.
+    private static func workspace() throws -> (directory: URL, source: URL, text: Data) {
+        let directory = try TestAudio.temporaryDirectory()
+        let source = directory.appending(path: "source.wav")
+        try TestAudio.write([TestAudio.voice(seconds: 2)], to: source)
+        return (directory, source, Data("Notes that the isolator must keep.".utf8))
+    }
+
+    private static func isUnsupportedConfiguration(_ error: any Error) -> Bool {
+        guard case SoundIsolationError.unsupportedConfiguration = error else { return false }
+        return true
+    }
+
+    @Test func refusedOutputKeepsAnExistingFile() async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let notes = directory.appending(path: "notes.txt")
+        try text.write(to: notes)
+
+        await #expect(throws: SoundIsolationError.self) {
+            try await SoundIsolator(model: StandInModel()).isolate(contentsOf: source, to: notes)
+        }
+        #expect(try Data(contentsOf: notes) == text)
+        #expect(try Self.names(in: directory) == ["notes.txt", "source.wav"])
+    }
+
+    @Test func refusedOutputKeepsAnExistingBackground() async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let background = directory.appending(path: "background.wav")
+        try text.write(to: background)
+
+        await #expect {
+            try await SoundIsolator(model: StandInModel())
+                .isolate(contentsOf: source, to: directory.appending(path: "voice.mp3"), background: background)
+        } throws: {
+            Self.isUnsupportedConfiguration($0)
+        }
+        #expect(try Data(contentsOf: background) == text)
+        #expect(try Self.names(in: directory) == ["background.wav", "source.wav"])
+
+        // A refused background keeps an existing output in the same way.
+        let voice = directory.appending(path: "voice.wav")
+        try text.write(to: voice)
+        await #expect {
+            try await SoundIsolator(model: StandInModel())
+                .isolate(contentsOf: source, to: voice, background: directory.appending(path: "background.txt"))
+        } throws: {
+            Self.isUnsupportedConfiguration($0)
+        }
+        #expect(try Data(contentsOf: voice) == text)
+    }
+
+    @Test(arguments: ["output", "output.wav"])
+    func directoryAsOutputIsKept(name: String) async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = directory.appending(path: name, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: false)
+        let kept = output.appending(path: "kept.txt")
+        try text.write(to: kept)
+        let background = directory.appending(path: "background.wav")
+
+        await #expect {
+            try await SoundIsolator(model: StandInModel()).isolate(contentsOf: source, to: output)
+        } throws: {
+            Self.isUnsupportedConfiguration($0)
+        }
+        // A directory is kept as a background also, and the output is not started.
+        await #expect {
+            try await SoundIsolator(model: StandInModel())
+                .isolate(contentsOf: source, to: background, background: output)
+        } throws: {
+            Self.isUnsupportedConfiguration($0)
+        }
+        #expect(try Data(contentsOf: kept) == text)
+        #expect(try Self.names(in: directory) == [name, "source.wav"])
+    }
+
+    @Test func engineFailureAfterTheFirstWriteKeepsExistingFiles() async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let voice = directory.appending(path: "voice.wav")
+        let background = directory.appending(path: "background.wav")
+        try text.write(to: voice)
+        try text.write(to: background)
+
+        // The source has 96,000 frames in blocks of 32,768, so the third block fails
+        // after the isolator wrote the first two. The temporary files exist at that time.
+        let temporaryFiles = Mutex<[String]>([])
+        let model = StandInModel(afterProcess: { frames in
+            guard frames > 70_000 else { return }
+            temporaryFiles.withLock { $0 = (try? Self.names(in: directory).filter { $0.hasPrefix(".") }) ?? [] }
+            throw SoundIsolationError.backendFailure(underlying: CocoaError(.fileReadUnknown))
+        })
+        let progress = Progress()
+        await #expect {
+            try await SoundIsolator(model: model)
+                .isolate(contentsOf: source, to: voice, background: background, progress: progress)
+        } throws: { error in
+            guard case SoundIsolationError.backendFailure = error else { return false }
+            return true
+        }
+        #expect(progress.completedUnitCount > 0)
+        #expect(temporaryFiles.withLock { $0.count } == 2)
+        #expect(try Data(contentsOf: voice) == text)
+        #expect(try Data(contentsOf: background) == text)
+        #expect(try Self.names(in: directory) == ["background.wav", "source.wav", "voice.wav"])
+    }
+
+    @Test func cancellationKeepsExistingFiles() async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let voice = directory.appending(path: "voice.wav")
+        let background = directory.appending(path: "background.wav")
+        try text.write(to: voice)
+
+        // The engine cancels the task that calls it, after the isolator wrote the first block.
+        let model = StandInModel(afterProcess: { frames in
+            if frames > 40_000 { withUnsafeCurrentTask { $0?.cancel() } }
+        })
+        let progress = Progress()
+        let task = Task {
+            try await SoundIsolator(model: model)
+                .isolate(contentsOf: source, to: voice, background: background, progress: progress)
+        }
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+        #expect(progress.completedUnitCount > 0)
+        #expect(try Data(contentsOf: voice) == text)
+        #expect(try Self.names(in: directory) == ["source.wav", "voice.wav"])
+    }
+
+    @Test func successReplacesExistingFiles() async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let voice = directory.appending(path: "voice.wav")
+        let background = directory.appending(path: "background.caf")
+        try text.write(to: voice)
+        try text.write(to: background)
+
+        try await SoundIsolator(model: StandInModel())
+            .isolate(contentsOf: source, to: voice, background: background)
+        let input = try await TestAudio.read(source)
+        #expect(try await TestAudio.read(voice) == input.map { channel in channel.map { $0 * 0.5 } })
+        #expect(try await TestAudio.read(background)[0].count == input[0].count)
+        #expect(try Self.names(in: directory) == ["background.caf", "source.wav", "voice.wav"])
+    }
+
+    @Test func failedSecondMoveKeepsTheDestination() async throws {
+        let (directory, source, text) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let voice = directory.appending(path: "voice.wav")
+        let background = directory.appending(path: "background.wav")
+        try text.write(to: background)
+
+        // The destination becomes a directory during the work, so its move fails.
+        // The background moves first, as the documentation says.
+        let model = StandInModel(afterProcess: { _ in
+            try? FileManager.default.createDirectory(at: voice, withIntermediateDirectories: false)
+        })
+        await #expect {
+            try await SoundIsolator(model: model).isolate(contentsOf: source, to: voice, background: background)
+        } throws: { error in
+            guard case SoundIsolationError.backendFailure = error else { return false }
+            return true
+        }
+        #expect(try Self.names(in: directory) == ["background.wav", "source.wav", "voice.wav"])
+        #expect(try Self.names(in: voice).isEmpty)
+        let input = try await TestAudio.read(source)
+        #expect(try await TestAudio.read(background)[0].count == input[0].count)
+    }
+
+    @Test func linksToTheSourceAreNotDestinations() async throws {
+        let (directory, source, _) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = try Data(contentsOf: source)
+        let hardLink = directory.appending(path: "hard.wav")
+        let symbolicLink = directory.appending(path: "symbolic.wav")
+        try FileManager.default.linkItem(at: source, to: hardLink)
+        try FileManager.default.createSymbolicLink(at: symbolicLink, withDestinationURL: source)
+
+        for link in [hardLink, symbolicLink] {
+            await #expect {
+                try await SoundIsolator(model: StandInModel()).isolate(contentsOf: source, to: link)
+            } throws: {
+                Self.isUnsupportedConfiguration($0)
+            }
+            await #expect {
+                try await SoundIsolator(model: StandInModel())
+                    .isolate(contentsOf: source, to: directory.appending(path: "voice.wav"), background: link)
+            } throws: {
+                Self.isUnsupportedConfiguration($0)
+            }
+        }
+        #expect(try Data(contentsOf: source) == original)
+        #expect(try Self.names(in: directory) == ["hard.wav", "source.wav", "symbolic.wav"])
     }
 }

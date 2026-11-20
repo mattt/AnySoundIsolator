@@ -271,6 +271,9 @@ struct StandInModel: SoundIsolationModel {
     var failure: (any Error & Sendable)? = nil
     /// Counts the executors that the model makes.
     var executors: Counter? = nil
+    /// Runs at the end of each call to `process`, with the number of frames that the engine has taken.
+    /// A test uses it to throw, to cancel the task, or to change a file in the middle of the work.
+    var afterProcess: (@Sendable (Int) throws -> Void)? = nil
 
     var availability: Availability<Never> { .available }
     var supportedSounds: Set<SoundIsolator.Sound> { sounds }
@@ -284,7 +287,8 @@ struct StandInModel: SoundIsolationModel {
             latency: latency,
             gain: gain,
             blockSize: blockSize,
-            extraFrames: extraFrames
+            extraFrames: extraFrames,
+            afterProcess: afterProcess
         )
     }
 }
@@ -296,20 +300,33 @@ actor StandInExecutor: SoundIsolationExecutor {
     private let gain: Float
     private let blockSize: Int
     private let extraFrames: Int
+    private let afterProcess: (@Sendable (Int) throws -> Void)?
     private var held: AudioSamples
+    private var taken = 0
 
-    init(sampleRate: Double, channelCount: Int, latency: Int, gain: Float, blockSize: Int, extraFrames: Int) {
+    init(
+        sampleRate: Double,
+        channelCount: Int,
+        latency: Int,
+        gain: Float,
+        blockSize: Int,
+        extraFrames: Int,
+        afterProcess: (@Sendable (Int) throws -> Void)? = nil
+    ) {
         self.sampleRate = sampleRate
         self.channelCount = channelCount
         self.latency = latency
         self.gain = gain
         self.blockSize = blockSize
         self.extraFrames = extraFrames
+        self.afterProcess = afterProcess
         // The output starts with silence as long as the latency.
         self.held = AudioSamples(channelCount: channelCount, frameCount: latency)
     }
 
-    func process(_ input: AudioSamples) -> AudioSamples {
+    func process(_ input: AudioSamples) throws -> AudioSamples {
+        taken += input.frameCount
+        try afterProcess?(taken)
         held.append(AudioSamples(channels: input.channels.map { channel in channel.map { $0 * gain } }))
         // Keep the frames that a short output leaves out, so that `finish` can drop them.
         let ready = max(0, held.frameCount + min(0, extraFrames))

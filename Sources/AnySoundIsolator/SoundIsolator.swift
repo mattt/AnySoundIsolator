@@ -101,9 +101,21 @@ public struct SoundIsolator: Sendable {
     /// The destination's path extension selects its type:
     /// `wav` and `caf` hold Float32 samples and so hold the output exactly;
     /// `m4a` holds AAC, which is smaller and is not exact.
-    /// An existing file at a destination is replaced.
-    /// The source, the destination, and the background must be different files.
-    /// If isolation fails or is cancelled, the isolator removes the files that it started.
+    /// The source, the destination, and the background must be different files,
+    /// and a destination cannot be a directory.
+    /// The isolator checks both destinations before it opens a file.
+    ///
+    /// The isolator writes each output to a temporary file in the destination's directory.
+    /// When all the audio is written, it moves each temporary file to its destination,
+    /// which replaces an existing file there.
+    /// If isolation fails or is cancelled before that,
+    /// the isolator removes the temporary files and leaves each destination as it was:
+    /// an existing file keeps its content, and no new file appears.
+    ///
+    /// The two moves are separate steps.
+    /// The isolator moves the background first and the isolated sound second.
+    /// If the second move fails, the method throws,
+    /// `destination` is as it was, and `background` holds its new content.
     ///
     /// - Parameters:
     ///   - source: The location of the recording.
@@ -121,12 +133,18 @@ public struct SoundIsolator: Sendable {
         options: IsolationOptions = IsolationOptions(),
         progress: Progress? = nil
     ) async throws {
-        let destinations = [destination] + (background.map { [$0] } ?? [])
-        let locations = ([source] + destinations).map(\.standardizedFileURL)
-        guard Set(locations).count == locations.count else {
-            throw SoundIsolationError.unsupportedConfiguration(
-                "The source, the destination, and the background must be different files."
-            )
+        // Check every location before any file is opened or created.
+        let isolatedLocation = try AudioFile.destination(destination)
+        let backgroundLocation = try background.map { try AudioFile.destination($0) }
+        let locations =
+            [source.resolvingSymlinksInPath().standardizedFileURL, isolatedLocation]
+            + (backgroundLocation.map { [$0] } ?? [])
+        for (index, location) in locations.enumerated() {
+            guard !locations[..<index].contains(where: { AudioFile.isSameFile($0, location) }) else {
+                throw SoundIsolationError.unsupportedConfiguration(
+                    "The source, the destination, and the background must be different files."
+                )
+            }
         }
         let input = try AudioFile.open(source)
         let frameCount = input.length
@@ -134,28 +152,24 @@ public struct SoundIsolator: Sendable {
         progress?.totalUnitCount = frameCount
         progress?.completedUnitCount = 0
 
+        var staged: [StagedAudioFile] = []
         do {
-            let isolatedFile = try AudioFile.create(destination, format: format)
-            let backgroundFile = try background.map { try AudioFile.create($0, format: format) }
-            // Close each file explicitly: a reference that is released late
-            // can leave the file open with its header unwritten.
-            defer {
-                isolatedFile.close()
-                backgroundFile?.close()
-            }
+            let isolatedFile = try StagedAudioFile(destination: isolatedLocation, format: format)
+            staged.append(isolatedFile)
+            let backgroundFile = try backgroundLocation.map { try StagedAudioFile(destination: $0, format: format) }
+            if let backgroundFile { staged.append(backgroundFile) }
             for try await audio in streamIsolation(contentsOf: source, options: options) {
-                do {
-                    try isolatedFile.write(from: audio.buffer)
-                    try backgroundFile?.write(from: audio.background())
-                } catch {
-                    throw SoundIsolationError.backendFailure(underlying: error)
-                }
+                try isolatedFile.write(audio.buffer)
+                try backgroundFile?.write(audio.background())
                 progress?.completedUnitCount = audio.framePosition + AVAudioFramePosition(audio.buffer.frameLength)
             }
+            try Task.checkCancellation()
+            // Close each file before its move, so that its header is written.
+            for file in staged { file.close() }
+            // The background moves first, so a failure of either move leaves the destination as it was.
+            for file in staged.reversed() { try file.replaceDestination() }
         } catch {
-            for url in destinations {
-                try? FileManager.default.removeItem(at: url)
-            }
+            for file in staged { file.discard() }
             throw error
         }
     }

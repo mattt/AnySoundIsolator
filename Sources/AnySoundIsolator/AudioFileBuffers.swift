@@ -89,6 +89,42 @@ enum AudioFile {
         }
     }
 
+    /// The path extensions of the file types that the isolator writes.
+    static let writableExtensions: Set<String> = ["wav", "caf", "m4a"]
+
+    /// Checks a destination before any file is opened,
+    /// and returns the location that the output replaces.
+    ///
+    /// The location has its symbolic links resolved,
+    /// so output through a link replaces the file that the link names and keeps the link.
+    static func destination(_ url: URL) throws -> URL {
+        guard url.isFileURL, writableExtensions.contains(url.pathExtension.lowercased()) else {
+            throw SoundIsolationError.unsupportedConfiguration(
+                "\(url.lastPathComponent) must have the extension wav, caf, or m4a."
+            )
+        }
+        let location = url.resolvingSymlinksInPath().standardizedFileURL
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: location.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            throw SoundIsolationError.unsupportedConfiguration(
+                "\(url.lastPathComponent) is a directory."
+            )
+        }
+        return location
+    }
+
+    /// Whether two locations name one file.
+    ///
+    /// Two different paths name one file when one is a hard link to the other,
+    /// or when the file system ignores a difference between them, such as case.
+    static func isSameFile(_ first: URL, _ second: URL) -> Bool {
+        if first == second || first.path == second.path { return true }
+        var firstStatus = stat()
+        var secondStatus = stat()
+        guard stat(first.path, &firstStatus) == 0, stat(second.path, &secondStatus) == 0 else { return false }
+        return firstStatus.st_dev == secondStatus.st_dev && firstStatus.st_ino == secondStatus.st_ino
+    }
+
     /// Creates a file whose type comes from the path extension of its location.
     ///
     /// WAV and CAF files hold Float32 samples, so they hold the isolator's output exactly.
@@ -122,5 +158,64 @@ enum AudioFile {
         } catch {
             throw SoundIsolationError.backendFailure(underlying: error)
         }
+    }
+}
+
+/// An output file that is written next to its destination and moved there after success.
+///
+/// Until the move, the destination is not opened or changed,
+/// so a failure cannot damage a file that was there before.
+struct StagedAudioFile {
+    /// The location that the finished file replaces.
+    let destination: URL
+    /// The location of the file while it is written.
+    ///
+    /// It is in the destination's directory, so the move stays on one volume and is atomic.
+    /// It keeps the destination's extension, which selects the file type.
+    let temporary: URL
+    private let file: AVAudioFile
+
+    init(destination: URL, format: AVAudioFormat) throws {
+        self.destination = destination
+        let name = ".\(destination.deletingPathExtension().lastPathComponent).\(UUID().uuidString)"
+        self.temporary = destination.deletingLastPathComponent()
+            .appending(path: name)
+            .appendingPathExtension(destination.pathExtension)
+        do {
+            self.file = try AudioFile.create(temporary, format: format)
+        } catch {
+            // A failed creation can leave an empty file.
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    func write(_ buffer: AVAudioPCMBuffer) throws {
+        do {
+            try file.write(from: buffer)
+        } catch {
+            throw SoundIsolationError.backendFailure(underlying: error)
+        }
+    }
+
+    /// Closes the file explicitly: a reference that is released late
+    /// can leave the file open with its header unwritten.
+    func close() {
+        file.close()
+    }
+
+    /// Moves the closed file to its destination, which replaces a file that is there.
+    func replaceDestination() throws {
+        guard rename(temporary.path, destination.path) == 0 else {
+            throw SoundIsolationError.backendFailure(
+                underlying: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            )
+        }
+    }
+
+    /// Closes and removes the temporary file. The destination does not change.
+    func discard() {
+        file.close()
+        try? FileManager.default.removeItem(at: temporary)
     }
 }

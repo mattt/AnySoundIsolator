@@ -79,7 +79,16 @@ The destination's extension selects its type:
 and `m4a` holds AAC, which is smaller and is not exact.
 The isolator reads and writes one block at a time,
 so a long recording does not need more memory than a short one.
-To stop, cancel the task; the isolator removes the files that it started.
+
+The isolator checks both destinations before it opens a file,
+and writes each output to a temporary file in the destination's directory.
+It moves the temporary files to their destinations only when all the audio is written,
+and that move replaces a file that is already there.
+To stop, cancel the task.
+After a cancellation or an error, the isolator removes the temporary files,
+and each destination is as it was before the call.
+The background moves first:
+if the move of the isolated sound then fails, the background holds its new content.
 
 ### Get results while a long file is processed
 
