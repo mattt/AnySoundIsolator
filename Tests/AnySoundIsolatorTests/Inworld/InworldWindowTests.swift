@@ -141,6 +141,29 @@
             #expect(Array(edges.suffix(3)) == [938 ..< 1_023, 1_023 ..< 1_024, 1_024 ..< 1_025])
         }
 
+        /// Values that would overflow the arithmetic on the configuration, or that make no network.
+        @Test func configurationWithValuesOutOfRangeIsRefused() throws {
+            let changes: [(inout InworldConfiguration) -> Void] = [
+                { $0.chunkSeconds = .infinity }, { $0.chunkSeconds = .nan }, { $0.chunkSeconds = 1e300 },
+                { $0.chunkSeconds = 0 }, { $0.overlapSeconds = -.infinity }, { $0.overlapSeconds = .nan },
+                { $0.numHeads = .max }, { $0.numHeads = 0 }, { $0.width = .max }, { $0.width = -512 },
+                { $0.sampleRate = 0 }, { $0.sampleRate = .max }, { $0.nFFT = .max }, { $0.nFFT = 1 },
+                { $0.hopLength = 0 }, { $0.hopLength = .max }, { $0.mambaExpand = .max }, { $0.mambaExpand = 0 },
+                { $0.mambaConv = 0 }, { $0.mambaState = 0 }, { $0.mambaState = .max },
+                { $0.bandPlan = [[100]] }, { $0.bandPlan = [[.min, .max]] }, { $0.correctionBound = .nan },
+            ]
+            for (index, change) in changes.enumerated() {
+                var configuration = try InworldFixture.configuration(InworldFixture.offlineConfiguration)
+                change(&configuration)
+                #expect("Change \(index) is refused.") {
+                    try configuration.validate()
+                } throws: { error in
+                    guard case SoundIsolationError.unsupportedConfiguration = error else { return false }
+                    return true
+                }
+            }
+        }
+
         @Test func streamingCheckpointsAreRefused() throws {
             var configuration = try InworldFixture.configuration(InworldFixture.offlineConfiguration)
             configuration.causal = true

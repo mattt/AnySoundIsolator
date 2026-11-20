@@ -98,6 +98,8 @@ actor IsolationPipeline {
     }
 
     private func configure(sampleRate: Double, channelCount: Int) async throws {
+        // Check the format before a model or a conversion reads it.
+        _ = try PCM.floatFormat(sampleRate: sampleRate, channelCount: channelCount)
         guard model.supportedSounds.contains(sound) else {
             throw SoundIsolationError.unsupportedConfiguration(
                 "The model cannot isolate the sound \"\(sound.rawValue)\"."
@@ -121,11 +123,15 @@ actor IsolationPipeline {
         for (index, executor) in executors.enumerated() {
             let channels = executors.count == 1 ? 0 ..< channelCount : index ..< index + 1
             let downmixes = executor.channelCount == 1 && channels.count > 1
-            guard executor.channelCount == channels.count || downmixes, executor.sampleRate > 0,
-                executor.latency >= 0
-            else {
+            guard executor.channelCount == channels.count || downmixes else {
                 throw SoundIsolationError.invalidResult(
                     "The executor takes \(executor.channelCount) channels, and the input has \(channelCount)."
+                )
+            }
+            guard executor.sampleRate.isFinite, executor.sampleRate > 0, executor.latency >= 0 else {
+                throw SoundIsolationError.invalidResult(
+                    "The executor reports a sample rate of \(executor.sampleRate) Hz "
+                        + "and a latency of \(executor.latency) frames."
                 )
             }
             let resamples = executor.sampleRate != sampleRate
@@ -175,6 +181,13 @@ actor IsolationPipeline {
         guard output.channelCount == expected else {
             throw SoundIsolationError.invalidResult(
                 "The executor returned \(output.channelCount) channels instead of \(expected)."
+            )
+        }
+        // `AudioSamples.channels` is a public property that an executor can change,
+        // so check the lengths before any copy reads a channel by the length of the first.
+        guard output.hasEqualChannelLengths else {
+            throw SoundIsolationError.invalidResult(
+                "The executor returned channels with \(output.channels.map(\.count)) samples, which are not equal."
             )
         }
         var output = output

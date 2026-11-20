@@ -37,8 +37,26 @@ enum PCM {
         )
     }
 
+    /// The largest channel count of a format, which is the largest count of a discrete channel layout.
+    static let maximumChannelCount = 0xFFFF
+
+    /// The largest sample rate of a format, in hertz.
+    /// It is far above any rate of real audio, and it keeps frame counts and time scales in range.
+    static let maximumSampleRate = 16_777_216.0
+
     /// Returns the deinterleaved Float32 format for a sample rate and a channel count.
+    ///
+    /// The values can come from a caller's request or from an engine,
+    /// so the method checks them before it converts them to unsigned integers.
     static func floatFormat(sampleRate: Double, channelCount: Int) throws -> AVAudioFormat {
+        guard sampleRate.isFinite, sampleRate > 0, sampleRate <= maximumSampleRate,
+            (1 ... maximumChannelCount).contains(channelCount)
+        else {
+            throw SoundIsolationError.invalidAudio(
+                "The audio must have a channel and a positive sample rate; "
+                    + "it has \(channelCount) channels at \(sampleRate) Hz."
+            )
+        }
         var description = AudioStreamBasicDescription(
             mSampleRate: sampleRate,
             mFormatID: kAudioFormatLinearPCM,
@@ -54,9 +72,7 @@ enum PCM {
             channelCount > 2
             ? AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channelCount))
             : nil
-        guard sampleRate.isFinite, sampleRate > 0, channelCount > 0,
-            let format = AVAudioFormat(streamDescription: &description, channelLayout: layout)
-        else {
+        guard let format = AVAudioFormat(streamDescription: &description, channelLayout: layout) else {
             throw SoundIsolationError.invalidAudio(
                 "The audio must have a channel and a positive sample rate."
             )
@@ -101,6 +117,11 @@ enum PCM {
     /// Makes a deinterleaved Float32 buffer that holds a copy of samples.
     static func buffer(from samples: AudioSamples, format: AVAudioFormat) throws -> AVAudioPCMBuffer {
         let frameCount = samples.frameCount
+        guard samples.hasEqualChannelLengths, frameCount <= Int(Int32.max) else {
+            throw SoundIsolationError.invalidResult(
+                "The audio has channels with \(samples.channels.map(\.count)) samples."
+            )
+        }
         guard samples.channelCount == Int(format.channelCount),
             let buffer = AVAudioPCMBuffer(
                 pcmFormat: format,

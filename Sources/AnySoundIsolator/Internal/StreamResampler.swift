@@ -12,6 +12,10 @@ import AVFoundation
 /// its output length varied between runs on the same file.
 /// `AVAudioConverter` gave the same length every time.
 final class StreamResampler {
+    /// The largest number of frames that one call to the converter returns.
+    /// The converter is called again while it has more, so a large ratio of the rates needs no large buffer.
+    private static let maximumBlock = 65_536.0
+
     private let converter: AVAudioConverter
     private let inputFormat: AVAudioFormat
     private let outputFormat: AVAudioFormat
@@ -42,7 +46,7 @@ final class StreamResampler {
     private func run(_ buffer: AVAudioPCMBuffer?, endOfStream: Bool) throws -> AudioSamples {
         let ratio = outputFormat.sampleRate / inputFormat.sampleRate
         let expected = (Double(buffer?.frameLength ?? 0) * ratio).rounded(.up)
-        let capacity = AVAudioFrameCount(max(4096, expected + 64))
+        let capacity = AVAudioFrameCount(min(max(4096, expected + 64), Self.maximumBlock))
         var pending = buffer
         var output = AudioSamples(channelCount: Int(outputFormat.channelCount))
         while true {

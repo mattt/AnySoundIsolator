@@ -16,23 +16,47 @@
     // Shapes are written as [batch, bands, frames, width], where batch counts windows.
 
     extension InworldNetwork {
-        /// Looks up weights by name and reports a missing one.
+        /// Looks up weights by name, and reports a missing one and one with the wrong shape.
+        ///
+        /// The network reads its sizes from the configuration.
+        /// A weight with another shape is an error here, with the weight's name,
+        /// before MLX computes with it.
         struct WeightStore {
             let arrays: [String: MLXArray]
 
-            func callAsFunction(_ name: String) throws -> MLXArray {
+            /// Returns a weight after a check of its shape.
+            ///
+            /// - Parameters:
+            ///   - name: The name of the weight in the checkpoint.
+            ///   - shape: The size of each dimension, or `nil` for a dimension of any positive size.
+            func callAsFunction(_ name: String, shape: [Int?]) throws -> MLXArray {
                 guard let array = arrays[name] else {
                     throw SoundIsolationError.invalidResult("The Inworld checkpoint has no weight named \(name).")
+                }
+                let actual = array.shape
+                guard actual.count == shape.count,
+                    zip(actual, shape).allSatisfy({ size, expected in size > 0 && (expected ?? size) == size })
+                else {
+                    let expected = shape.map { $0.map(String.init) ?? "any" }.joined(separator: ", ")
+                    throw SoundIsolationError.unsupportedConfiguration(
+                        "The Inworld checkpoint is not supported: "
+                            + "the weight \(name) has the shape \(actual), not [\(expected)]."
+                    )
                 }
                 return array
             }
 
-            func linear(_ prefix: String, bias: Bool = true) throws -> Linear {
-                Linear(weight: try self("\(prefix).weight"), bias: bias ? try self("\(prefix).bias") : nil)
+            /// Returns a linear layer. A size of `nil` accepts any positive size.
+            func linear(_ prefix: String, from input: Int?, to output: Int?, bias: Bool = true) throws -> Linear {
+                let weight = try self("\(prefix).weight", shape: [output, input])
+                return Linear(weight: weight, bias: bias ? try self("\(prefix).bias", shape: [weight.dim(0)]) : nil)
             }
 
-            func layerNorm(_ prefix: String) throws -> LayerNorm {
-                LayerNorm(weight: try self("\(prefix).weight"), bias: try self("\(prefix).bias"))
+            func layerNorm(_ prefix: String, _ size: Int) throws -> LayerNorm {
+                LayerNorm(
+                    weight: try self("\(prefix).weight", shape: [size]),
+                    bias: try self("\(prefix).bias", shape: [size])
+                )
             }
         }
 
@@ -128,13 +152,13 @@
             let heads: Int
             let exclusive: Bool
 
-            init(_ w: WeightStore, _ prefix: String, heads: Int, exclusive: Bool) throws {
-                norm1 = try w.layerNorm("\(prefix).norm1")
-                norm2 = try w.layerNorm("\(prefix).norm2")
-                qkv = try w.linear("\(prefix).attn.qkv")
-                proj = try w.linear("\(prefix).attn.proj")
-                ffn1 = try w.linear("\(prefix).ffn.0")
-                ffn2 = try w.linear("\(prefix).ffn.3")
+            init(_ w: WeightStore, _ prefix: String, width: Int, heads: Int, exclusive: Bool) throws {
+                norm1 = try w.layerNorm("\(prefix).norm1", width)
+                norm2 = try w.layerNorm("\(prefix).norm2", width)
+                qkv = try w.linear("\(prefix).attn.qkv", from: width, to: 3 * width)
+                proj = try w.linear("\(prefix).attn.proj", from: width, to: width)
+                ffn1 = try w.linear("\(prefix).ffn.0", from: width, to: nil)
+                ffn2 = try w.linear("\(prefix).ffn.3", from: ffn1.weight.dim(0), to: width)
                 self.heads = heads
                 self.exclusive = exclusive
             }
@@ -165,16 +189,16 @@
             let heads: Int
             let exclusive: Bool
 
-            init(_ w: WeightStore, _ prefix: String, heads: Int, exclusive: Bool) throws {
-                norm1 = try w.layerNorm("\(prefix).norm1")
-                norm2 = try w.layerNorm("\(prefix).norm2")
+            init(_ w: WeightStore, _ prefix: String, width: Int, heads: Int, exclusive: Bool) throws {
+                norm1 = try w.layerNorm("\(prefix).norm1", width)
+                norm2 = try w.layerNorm("\(prefix).norm2", width)
                 inProj = Linear(
-                    weight: try w("\(prefix).self_attn.in_proj_weight"),
-                    bias: try w("\(prefix).self_attn.in_proj_bias")
+                    weight: try w("\(prefix).self_attn.in_proj_weight", shape: [3 * width, width]),
+                    bias: try w("\(prefix).self_attn.in_proj_bias", shape: [3 * width])
                 )
-                outProj = try w.linear("\(prefix).self_attn.out_proj")
-                linear1 = try w.linear("\(prefix).linear1")
-                linear2 = try w.linear("\(prefix).linear2")
+                outProj = try w.linear("\(prefix).self_attn.out_proj", from: width, to: width)
+                linear1 = try w.linear("\(prefix).linear1", from: width, to: nil)
+                linear2 = try w.linear("\(prefix).linear2", from: linear1.weight.dim(0), to: width)
                 self.heads = heads
                 self.exclusive = exclusive
             }
@@ -208,12 +232,14 @@
                 time = try TimeBlock(
                     w,
                     "\(prefix).time_transformer",
+                    width: configuration.width,
                     heads: configuration.numHeads,
                     exclusive: onTime
                 )
                 band = try BandTransformer(
                     w,
                     "\(prefix).band_transformer",
+                    width: configuration.width,
                     heads: configuration.numHeads,
                     exclusive: false
                 )
@@ -242,17 +268,21 @@
             let dtRank: Int
             let states: Int
 
-            init(_ w: WeightStore, _ prefix: String, width: Int, states: Int) throws {
-                inProj = try w.linear("\(prefix).in_proj", bias: false)
-                xProj = try w.linear("\(prefix).x_proj", bias: false)
-                dtProj = try w.linear("\(prefix).dt_proj")
-                outProj = try w.linear("\(prefix).out_proj", bias: false)
-                let conv = try w("\(prefix).conv1d.weight")
+            init(_ w: WeightStore, _ prefix: String, configuration: InworldConfiguration) throws {
+                let (width, states) = (configuration.width, configuration.mambaState)
+                let inner = configuration.mambaExpand * width
+                let rank = (width + 15) / 16
+                inProj = try w.linear("\(prefix).in_proj", from: width, to: 2 * inner, bias: false)
+                xProj = try w.linear("\(prefix).x_proj", from: inner, to: rank + 2 * states, bias: false)
+                dtProj = try w.linear("\(prefix).dt_proj", from: rank, to: inner)
+                outProj = try w.linear("\(prefix).out_proj", from: inner, to: width, bias: false)
+                let conv = try w("\(prefix).conv1d.weight", shape: [inner, 1, configuration.mambaConv])
                 convWeight = conv.reshaped(conv.dim(0), conv.dim(2))
-                convBias = try w("\(prefix).conv1d.bias")
-                a = -exp(try w("\(prefix).A_log"))
-                d = try w("\(prefix).D")
-                dtRank = (width + 15) / 16
+                convBias = try w("\(prefix).conv1d.bias", shape: [inner])
+                // The scan kernel reads its sizes from these shapes.
+                a = -exp(try w("\(prefix).A_log", shape: [inner, states]))
+                d = try w("\(prefix).D", shape: [inner])
+                dtRank = rank
                 self.states = states
             }
 
@@ -288,11 +318,11 @@
             let norm: LayerNorm
 
             init(_ w: WeightStore, _ prefix: String, configuration: InworldConfiguration) throws {
-                let (width, states) = (configuration.width, configuration.mambaState)
-                forward = try Mamba(w, "\(prefix).forward_blocks", width: width, states: states)
-                backward = try Mamba(w, "\(prefix).backward_blocks", width: width, states: states)
-                outputProj = try w.linear("\(prefix).output_proj")
-                norm = try w.layerNorm("\(prefix).norm")
+                let width = configuration.width
+                forward = try Mamba(w, "\(prefix).forward_blocks", configuration: configuration)
+                backward = try Mamba(w, "\(prefix).backward_blocks", configuration: configuration)
+                outputProj = try w.linear("\(prefix).output_proj", from: 2 * width, to: width)
+                norm = try w.layerNorm("\(prefix).norm", width)
             }
 
             func callAsFunction(_ x: MLXArray) -> MLXArray {
@@ -370,31 +400,35 @@
         init(configuration: InworldConfiguration, weights arrays: [String: MLXArray]) throws {
             try configuration.validate()
             let w = WeightStore(arrays: arrays)
+            let width = configuration.width
             self.configuration = configuration
             edges = configuration.bandEdges
-            encoders = try edges.indices.map { index in
+            // Each band's encoder reads the real and imaginary parts of the band's bins.
+            encoders = try edges.enumerated().map { index, edge in
                 BandEncoder(
-                    norm: try w.layerNorm("encoders.\(index).0"),
-                    projection: try w.linear("encoders.\(index).1")
+                    norm: try w.layerNorm("encoders.\(index).0", 2 * edge.count),
+                    projection: try w.linear("encoders.\(index).1", from: 2 * edge.count, to: width)
                 )
             }
-            bandEmbedding = try w("band_embedding")
+            bandEmbedding = try w("band_embedding", shape: [edges.count, width])
             blocks = try configuration.blockTypes.enumerated().map { index, kind in
                 kind == "transformer"
                     ? .attention(try DualPathAttention(w, "blocks.\(index)", configuration: configuration))
                     : .mamba(try DualPathMamba(w, "blocks.\(index)", configuration: configuration))
             }
             // The decoder's conditioning on its fixed controls [1, 0].
-            let condition = try w.linear("denoise_decoder.condition")
+            let condition = try w.linear("denoise_decoder.condition", from: 2, to: 2 * width)
             let scaleShift = condition(MLXArray([Float(1), 0]))
             decoderScale = 1 + scaleShift[..<configuration.width]
             decoderShift = scaleShift[configuration.width...]
-            heads = try edges.indices.map { index in
+            // Each band's head returns four values for each of the band's bins.
+            heads = try edges.enumerated().map { index, edge in
                 let prefix = "denoise_decoder.heads.\(index)"
+                let hidden = try w.linear("\(prefix).1", from: width, to: nil)
                 return BandHead(
-                    norm: try w.layerNorm("\(prefix).0"),
-                    hidden: try w.linear("\(prefix).1"),
-                    output: try w.linear("\(prefix).3")
+                    norm: try w.layerNorm("\(prefix).0", width),
+                    hidden: hidden,
+                    output: try w.linear("\(prefix).3", from: hidden.weight.dim(0), to: 4 * edge.count)
                 )
             }
             transform = InworldSpectralTransform(nFFT: configuration.nFFT, hop: configuration.hopLength)

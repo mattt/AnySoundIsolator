@@ -251,6 +251,53 @@ import Testing
         }
     }
 
+    // MARK: - Values that a caller or an engine supplies
+
+    /// An executor can change `AudioSamples.channels` so that the channels differ in length.
+    @Test(arguments: [false, true])
+    func outputWithUnequalChannelsIsAnError(atTheEnd: Bool) async throws {
+        let isolator = SoundIsolator(model: MalformedModel(atTheEnd: atTheEnd))
+        let stereo = [TestAudio.voice(seconds: 0.1, seed: 1), TestAudio.voice(seconds: 0.1, seed: 2)]
+        await #expect {
+            _ = try await isolator.isolate(try TestAudio.buffer(stereo))
+        } throws: { error in
+            guard case SoundIsolationError.invalidResult = error else { return false }
+            return true
+        }
+    }
+
+    @Test(arguments: [Double.infinity, .nan, -48_000, 0, 1e12])
+    func executorWithAnInvalidSampleRateIsAnError(sampleRate: Double) async throws {
+        let isolator = SoundIsolator(model: StandInModel(sampleRate: sampleRate))
+        await #expect(throws: SoundIsolationError.self) {
+            _ = try await isolator.isolate(try TestAudio.buffer([input]))
+        }
+    }
+
+    /// The resampler returns its output in blocks, so a large ratio of the rates needs no large buffer.
+    @Test func executorAtAVeryHighSampleRateKeepsTheLength() async throws {
+        // 2,000 frames at 8 kHz are 96,000 frames at 384 kHz, which is more than one block.
+        let short = Array(TestAudio.voice(seconds: 0.25, sampleRate: 8_000))
+        let isolator = SoundIsolator(model: StandInModel(sampleRate: 384_000, gain: 1))
+        let audio = try await isolator.isolate(try TestAudio.buffer([short], sampleRate: 8_000))
+        #expect(audio.buffer.frameLength == 2_000)
+        #expect(TestAudio.channels(audio.buffer)[0].allSatisfy { $0.isFinite })
+    }
+
+    @Test(arguments: [
+        SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: -1),
+        SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 0),
+        SoundIsolationRequest(sound: .voice, sampleRate: -1, channelCount: 1),
+        SoundIsolationRequest(sound: .voice, sampleRate: .nan, channelCount: 1),
+        SoundIsolationRequest(sound: .voice, sampleRate: .infinity, channelCount: 2),
+    ])
+    func systemModelRefusesAnInvalidRequest(request: SoundIsolationRequest) async throws {
+        try #require(SystemSoundIsolationModel().isAvailable)
+        await #expect(throws: SoundIsolationError.self) {
+            _ = try await SystemSoundIsolationModel().makeExecutor(for: request)
+        }
+    }
+
     @Test func engineErrorKeepsItsCause() async throws {
         struct EngineFailure: Error {}
         let isolator = SoundIsolator(model: StandInModel(failure: EngineFailure()))
@@ -326,6 +373,39 @@ import Testing
         try await request.downloadAndInstall()
         #expect(await count.value == 1)
         #expect(try await SoundIsolator(model: StandInModel()).assetInstallationRequest() == nil)
+    }
+}
+
+/// An engine for two channels whose output has channels of different lengths.
+struct MalformedModel: SoundIsolationModel {
+    /// Whether the malformed output comes from `finish` and not from `process`.
+    let atTheEnd: Bool
+
+    var availability: Availability<Never> { .available }
+
+    func makeExecutor(for request: SoundIsolationRequest) async throws -> any SoundIsolationExecutor {
+        Executor(sampleRate: request.sampleRate, atTheEnd: atTheEnd)
+    }
+
+    struct Executor: SoundIsolationExecutor {
+        let sampleRate: Double
+        let atTheEnd: Bool
+        var channelCount: Int { 2 }
+        var latency: Int { 0 }
+
+        func process(_ input: AudioSamples) -> AudioSamples {
+            atTheEnd ? input : malformed(input)
+        }
+
+        func finish() -> AudioSamples {
+            atTheEnd ? malformed(AudioSamples(channelCount: 2, frameCount: 8)) : AudioSamples(channelCount: 2)
+        }
+
+        private func malformed(_ samples: AudioSamples) -> AudioSamples {
+            var samples = samples
+            samples.channels[1].removeLast(3)
+            return samples
+        }
     }
 }
 

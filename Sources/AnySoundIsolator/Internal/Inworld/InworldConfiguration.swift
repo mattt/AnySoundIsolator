@@ -69,8 +69,16 @@
             if blockTypes.contains(where: { $0 != "transformer" && $0 != "mamba" }) {
                 throw refuse("unknown block type in \(blockTypes)")
             }
-            if numHeads < 1 || width < 1 || width % (2 * numHeads) != 0 {
+            // The limits are far above the released checkpoint.
+            // They keep the arithmetic on these values, and the sizes of the arrays, in range.
+            if !(1 ... 65_536).contains(width) || !(1 ... 1_024).contains(numHeads) || width % (2 * numHeads) != 0 {
                 throw refuse("width \(width) with \(numHeads) heads")
+            }
+            if !(1 ... 64).contains(mambaExpand) || !(1 ... 1_024).contains(mambaConv) {
+                throw refuse("expansion \(mambaExpand) with a convolution of \(mambaConv) taps")
+            }
+            if blockTypes.count > 1_024 {
+                throw refuse("\(blockTypes.count) blocks")
             }
             if mambaState < 1 || mambaState > InworldSelectiveScan.maximumStates {
                 throw refuse("state size \(mambaState)")
@@ -78,12 +86,24 @@
             if exclusiveSelfAttention && exclusiveAxes != "time" {
                 throw refuse("exclusive attention along \(exclusiveAxes)")
             }
-            if bandPlan.contains(where: { $0.count != 2 }) {
+            if bandPlan.count > 1_024
+                || bandPlan.contains(where: { $0.count != 2 || $0.contains { !(0 ... 1_000_000).contains($0) } })
+            {
                 throw refuse("band plan \(bandPlan)")
             }
-            let window = windowSamples
-            if sampleRate < 1 || nFFT < 2 || hopLength < 1 || window.chunk < 1 || window.overlap < 0 {
+            if !(1 ... 768_000).contains(sampleRate) || !(2 ... 1_048_576).contains(nFFT)
+                || !(1 ... nFFT).contains(hopLength)
+            {
                 throw refuse("sample rate \(sampleRate), FFT size \(nFFT), hop \(hopLength)")
+            }
+            if !correctionBound.isFinite {
+                throw refuse("correction bound \(correctionBound)")
+            }
+            // Check the durations before `windowSamples` converts them to whole samples.
+            if !chunkSeconds.isFinite || !overlapSeconds.isFinite || chunkSeconds <= 0 || chunkSeconds > 3_600
+                || overlapSeconds < 0 || overlapSeconds > chunkSeconds || windowSamples.chunk < 1
+            {
+                throw refuse("windows of \(chunkSeconds) s that overlap by \(overlapSeconds) s")
             }
         }
 

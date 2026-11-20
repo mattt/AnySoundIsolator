@@ -154,6 +154,33 @@
             }
         }
 
+        /// A weight whose shape does not follow from the configuration is an error with the weight's name,
+        /// before the network computes with it.
+        @Test(arguments: [
+            ("blocks.1.time_mamba.forward_blocks.A_log", [32, 5]),
+            ("blocks.1.freq_mamba.backward_blocks.conv1d.weight", [32, 1, 3]),
+            ("blocks.0.time_transformer.attn.qkv.weight", [48, 12]),
+            ("band_embedding", [3, 16]),
+            ("encoders.0.1.bias", [15]),
+        ])
+        func checkpointWithAWrongShapeIsRefused(name: String, shape: [Int]) async throws {
+            try await withTemporaryDirectory { directory in
+                let checkpoint = directory.appending(path: "small.safetensors")
+                try InworldFixture.writeSmallCheckpoint(to: checkpoint) { arrays in
+                    #expect(arrays[name] != nil && arrays[name]?.shape != shape)
+                    arrays[name] = MLXArray.zeros(shape)
+                }
+                let isolator = SoundIsolator(model: InworldSoundIsolationModel(assets: .file(checkpoint)))
+                let buffer = try TestAudio.buffer([TestAudio.voice(seconds: 0.1)])
+                await #expect {
+                    _ = try await isolator.isolate(buffer)
+                } throws: { error in
+                    guard case SoundIsolationError.unsupportedConfiguration(let message) = error else { return false }
+                    return message.contains(name)
+                }
+            }
+        }
+
         @Test func fileThatIsNotACheckpointIsRefused() async throws {
             try await withTemporaryDirectory { directory in
                 let file = directory.appending(path: "other.safetensors")

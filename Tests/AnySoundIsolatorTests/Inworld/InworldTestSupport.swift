@@ -179,7 +179,10 @@
         ///
         /// The network isolates nothing; the file tests loading, shapes, and window placement
         /// without a download.
-        static func writeSmallCheckpoint(to url: URL) throws {
+        static func writeSmallCheckpoint(
+            to url: URL,
+            changing change: (inout [String: MLXArray]) -> Void = { _ in }
+        ) throws {
             let configuration = try configuration(smallConfiguration)
             let width = configuration.width
             let inner = configuration.mambaExpand * width
@@ -243,6 +246,7 @@
                     }
                 }
             }
+            change(&arrays)
             try save(arrays: arrays, metadata: ["config": smallConfiguration], url: url)
         }
     }

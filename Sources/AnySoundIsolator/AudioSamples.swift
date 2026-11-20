@@ -13,7 +13,7 @@ public struct AudioSamples: Sendable, Equatable {
     /// - Parameter channels: The samples of each channel, all with the same count.
     public init(channels: [[Float]]) {
         precondition(
-            channels.allSatisfy { $0.count == channels[0].count },
+            channels.allSatisfy { $0.count == channels.first?.count },
             "Every channel must have the same number of samples."
         )
         self.channels = channels
@@ -43,6 +43,13 @@ public struct AudioSamples: Sendable, Equatable {
 }
 
 extension AudioSamples {
+    /// Whether every channel has the same number of samples.
+    ///
+    /// The initializer checks this, but ``channels`` can change afterward.
+    var hasEqualChannelLengths: Bool {
+        channels.allSatisfy { $0.count == frameCount }
+    }
+
     /// Appends the frames of other audio with the same channel count.
     mutating func append(_ other: AudioSamples) {
         precondition(other.channelCount == channelCount)
