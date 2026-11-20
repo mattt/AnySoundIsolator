@@ -20,6 +20,32 @@ import Testing
         #expect(try await TestAudio.read(url) == [samples])
     }
 
+    /// A CAF or M4A file that is cut short states more audio than it holds.
+    /// The isolator reports that as an error and writes no output.
+    /// (`AVAudioFile` reports the shorter length of a WAV file that is cut short, so that file is not an error.)
+    @Test(arguments: ["caf", "m4a"])
+    func fileCutShortIsAnError(type: String) async throws {
+        let directory = try TestAudio.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "source.\(type)")
+        let file = try AudioFile.create(source, format: PCM.floatFormat(sampleRate: 48_000, channelCount: 1))
+        try file.write(from: TestAudio.buffer([TestAudio.voice(seconds: 2)]))
+        file.close()
+        let size = try #require(try FileManager.default.attributesOfItem(atPath: source.path)[.size] as? Int)
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.truncate(atOffset: UInt64(size / 2))
+        try handle.close()
+
+        await #expect {
+            try await SoundIsolator(model: StandInModel())
+                .isolate(contentsOf: source, to: directory.appending(path: "voice.wav"))
+        } throws: { error in
+            guard case SoundIsolationError.invalidAudio = error else { return false }
+            return true
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["source.\(type)"])
+    }
+
     @Test(arguments: ["wav", "caf"])
     func fileOutputMatchesTheContract(type: String) async throws {
         let directory = try TestAudio.temporaryDirectory()

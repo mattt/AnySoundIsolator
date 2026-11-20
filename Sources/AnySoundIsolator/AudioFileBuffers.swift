@@ -50,8 +50,8 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
         ///
         /// - Parameter actor: The actor that the caller runs on.
         /// - Returns: The next block, or `nil` at the end of the file.
-        /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the file cannot be read,
-        ///   or `CancellationError`.
+        /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the file cannot be read
+        ///   or ends before the number of frames that it states, or `CancellationError`.
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> AudioInput? {
@@ -71,7 +71,14 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
                     "\(url.lastPathComponent) could not be read: \(error.localizedDescription)"
                 )
             }
-            return buffer.frameLength > 0 ? AudioInput(owning: buffer) : nil
+            // The file states more frames than this read reached.
+            // To end the stream here would report a short output as a success.
+            guard buffer.frameLength > 0 else {
+                throw SoundIsolationError.invalidAudio(
+                    "\(url.lastPathComponent) ended after \(file.framePosition) of its \(file.length) frames."
+                )
+            }
+            return AudioInput(owning: buffer)
         }
     }
 }
