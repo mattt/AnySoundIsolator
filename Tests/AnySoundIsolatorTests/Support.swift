@@ -300,7 +300,7 @@ enum Machine {
     ///
     /// The condition is a virtual machine with macOS 27 or later, which is where the difference occurred:
     /// in three CI runs, a different test of exact equality failed each time on the macOS 27 runners,
-    /// with most frames different and the same level.
+    /// with most frames different.
     /// The same tests passed in each run on the virtual machines with macOS 26,
     /// and they pass on an Apple M4 Max with macOS 27 that is not virtual.
     /// The cause is unknown.

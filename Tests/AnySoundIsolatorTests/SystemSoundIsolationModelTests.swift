@@ -9,7 +9,7 @@ import Testing
 /// A test that compares two renders of the same samples uses `TestAudio.expectSameRender`.
 /// It requires equal samples, except on a machine where `Machine.systemUnitCanDiffer` is true:
 /// there, a difference in the samples is a known issue with an unknown cause,
-/// and the test still requires the same length, place in time, and level.
+/// and the test still requires the same length and place in time, and a level within a factor of two.
 @Suite(.enabled(if: SystemSoundIsolationModel().isAvailable))
 struct SystemSoundIsolationModelTests {
     typealias Quality = SystemSoundIsolationModel.Quality

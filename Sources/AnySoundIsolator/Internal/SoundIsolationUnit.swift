@@ -12,7 +12,7 @@ import Synchronization
 /// With that, two units in one process gave the same output for the same samples on that Mac.
 /// The package does not promise this on every machine:
 /// on virtual machines with macOS 27, two renders of the same samples differed in some runs,
-/// in most frames and with the same level, for a cause that is not known.
+/// in most frames and in level, by as much as 19 percent, for a cause that is not known.
 /// The output can also differ between builds of the package and between versions of the system.
 /// The output trails the input by ``latency`` frames.
 final class SoundIsolationUnit {

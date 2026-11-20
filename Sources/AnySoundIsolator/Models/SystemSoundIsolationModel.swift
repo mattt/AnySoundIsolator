@@ -36,7 +36,8 @@ import AudioToolbox
 /// The audio unit does not always give the same samples for the same audio.
 /// On an Apple M4 Max with macOS 27, a buffer, a stream, and a file of the same audio gave the same samples.
 /// On virtual machines with macOS 27, two runs on the same audio differed in most samples,
-/// with the same length, place in time, and level.
+/// with the same length and place in time.
+/// With standard quality, their levels differed by 19 percent.
 /// Do not compare the model's output sample for sample.
 public struct SystemSoundIsolationModel: SoundIsolationModel {
     /// The voice isolation that the audio unit performs.
