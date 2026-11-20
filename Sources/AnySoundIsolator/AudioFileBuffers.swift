@@ -1,32 +1,36 @@
 import AVFoundation
 
-/// The audio of a file as a sequence of buffers.
+/// The audio of a file as a sequence of inputs for a stream.
 ///
 /// The sequence opens the file when iteration starts and reads it one block at a time,
 /// so a long recording is never in memory all at once.
-/// Each buffer is deinterleaved Float32 audio at the file's sample rate and channel count.
+/// Each input is deinterleaved Float32 audio at the file's sample rate and channel count.
 /// The sequence reads the types that `AVAudioFile` reads.
 public struct AudioFileBuffers: AsyncSequence, Sendable {
-    public typealias Element = AVAudioPCMBuffer
+    /// A block of the file's audio.
+    public typealias Element = AudioInput
+
+    /// An error from reading the file, or `CancellationError`.
     public typealias Failure = any Error
 
     /// The location of the file.
     public let url: URL
 
-    /// The largest number of frames in one buffer.
+    /// The largest number of frames in one input.
     public let blockSize: AVAudioFrameCount
 
     /// Creates a sequence of a file's audio.
     ///
     /// - Parameters:
     ///   - url: The location of an audio file.
-    ///   - blockSize: The largest number of frames in one buffer.
+    ///   - blockSize: The largest number of frames in one input.
     public init(url: URL, blockSize: AVAudioFrameCount = 32_768) {
         precondition(blockSize > 0, "The block size must be positive.")
         self.url = url
         self.blockSize = blockSize
     }
 
+    /// Creates an iterator that opens the file and reads it from its start.
     public func makeAsyncIterator() -> AsyncIterator {
         AsyncIterator(url: url, blockSize: blockSize)
     }
@@ -42,9 +46,15 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
             self.blockSize = blockSize
         }
 
+        /// Reads the next block of the file.
+        ///
+        /// - Parameter actor: The actor that the caller runs on.
+        /// - Returns: The next block, or `nil` at the end of the file.
+        /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the file cannot be read,
+        ///   or `CancellationError`.
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
-        ) async throws -> AVAudioPCMBuffer? {
+        ) async throws -> AudioInput? {
             try Task.checkCancellation()
             let file = try self.file ?? AudioFile.open(url)
             self.file = file
@@ -61,7 +71,7 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
                     "\(url.lastPathComponent) could not be read: \(error.localizedDescription)"
                 )
             }
-            return buffer.frameLength > 0 ? buffer : nil
+            return buffer.frameLength > 0 ? AudioInput(owning: buffer) : nil
         }
     }
 }

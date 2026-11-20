@@ -1,30 +1,34 @@
 import AVFoundation
 
-/// Isolated sound that arrives while the isolator reads a sequence of buffers.
+/// Isolated sound that arrives while the isolator reads a sequence of audio.
 ///
 /// ``SoundIsolator/streamIsolation(of:)`` and ``SoundIsolator/streamIsolation(contentsOf:)``
 /// return this type.
 /// The stream does no work until you iterate it.
 /// Each iteration reads the source from its start with a new executor,
-/// and the stream reads one source buffer only when it needs more input,
+/// and the stream reads one piece of the source only when it needs more input,
 /// so a slow consumer slows the source and nothing accumulates.
 ///
 /// Across all of its elements, the stream delivers exactly as many frames as the source,
 /// in order and without gaps.
-/// The boundaries between elements are not the boundaries between source buffers:
+/// The boundaries between elements are not the boundaries between pieces of the source:
 /// an engine with latency returns the first frames late, and the rest after the source ends.
 ///
 /// To stop early, stop iterating or cancel the task.
 /// An error from the source ends the stream with that error.
 public struct IsolationStream<Source: AsyncSequence>: AsyncSequence
-where Source.Element == AVAudioPCMBuffer {
+where Source.Element == AudioInput {
+    /// A piece of isolated sound with the input frames that it came from.
     public typealias Element = IsolatedAudio
+
+    /// A ``SoundIsolationError``, an error from the source, or `CancellationError`.
     public typealias Failure = any Error
 
     let source: Source
     let model: any SoundIsolationModel
     let sound: SoundIsolator.Sound
 
+    /// Creates an iterator with a new executor that reads the source from its start.
     public func makeAsyncIterator() -> AsyncIterator {
         AsyncIterator(
             source: source.makeAsyncIterator(),
@@ -45,16 +49,20 @@ where Source.Element == AVAudioPCMBuffer {
             self.pipeline = pipeline
         }
 
+        /// Reads the source until some isolated sound is ready, and returns it.
+        ///
+        /// - Parameter actor: The actor that the caller runs on.
+        /// - Returns: The next piece of isolated sound, or `nil` after the last one.
+        /// - Throws: A ``SoundIsolationError``, an error from the source, or `CancellationError`.
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> IsolatedAudio? {
             while ready.isEmpty {
                 guard !isFinished else { return nil }
                 try Task.checkCancellation()
-                if let buffer = try await source.next(isolation: actor) {
-                    // Copy the samples before the next suspension; the caller can reuse the buffer.
-                    let samples = try intake.samples(from: buffer)
-                    let sampleRate = buffer.format.sampleRate
+                if let input = try await source.next(isolation: actor) {
+                    let samples = try intake.samples(from: input.buffer)
+                    let sampleRate = input.buffer.format.sampleRate
                     ready = try await pipeline.process(samples, sampleRate: sampleRate)
                 } else {
                     isFinished = true

@@ -109,7 +109,7 @@ import Testing
         #expect(TestAudio.maximumDifference(channels[1], [-0.5, -0.25, 0, -1]) < 1e-4)
     }
 
-    @Test func streamCopiesABufferThatTheCallerReuses() async throws {
+    @Test func inputCopiesABufferThatTheCallerReuses() async throws {
         let shared = try TestAudio.buffer([Array(repeating: 0, count: 100)])
         let data = try #require(shared.floatChannelData)[0]
         var block = 0

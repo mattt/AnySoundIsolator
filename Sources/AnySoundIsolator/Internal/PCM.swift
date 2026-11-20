@@ -101,9 +101,8 @@ enum PCM {
     }
 }
 
-/// Copies the buffers of one stream as deinterleaved Float32 samples.
+/// Reads the buffers of one stream as deinterleaved Float32 samples.
 ///
-/// The copy is made at once, so the caller can reuse its buffer.
 /// A stream has one format; a buffer in another format is an error.
 struct Intake {
     /// The deinterleaved Float32 format of the stream, known after the first buffer.

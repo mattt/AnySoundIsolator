@@ -29,8 +29,12 @@ public struct SoundIsolator: Sendable {
     /// Voice is the only sound now.
     /// The type can gain values, such as music, without a change to the rest of the API.
     public struct Sound: RawRepresentable, Hashable, Sendable {
+        /// The name of the sound, such as `voice`.
         public let rawValue: String
 
+        /// Creates a sound from its name.
+        ///
+        /// - Parameter rawValue: The name of the sound.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
@@ -155,30 +159,33 @@ public struct SoundIsolator: Sendable {
 
     // MARK: - Buffers
 
-    /// Isolates the sound in a sequence of buffers, such as live audio.
+    /// Isolates the sound in a sequence of audio, such as live audio.
     ///
-    /// The buffers can be in any PCM format.
-    /// All of them must have the same format, and each follows the one before it without a gap.
-    /// The isolator copies a buffer's samples when it reads the buffer,
-    /// so you can reuse your buffers.
+    /// The audio can be in any PCM format.
+    /// Every input must have the same format, and each follows the one before it without a gap.
+    /// Wrap each capture buffer in an ``AudioInput``, which copies it:
     ///
     /// ```swift
+    /// let (buffers, input) = AsyncStream<AudioInput>.makeStream()
+    /// // In the capture callback: input.yield(AudioInput(buffer: buffer))
+    ///
     /// for try await audio in isolator.streamIsolation(of: buffers) {
-    ///     player.scheduleBuffer(audio.buffer)
+    ///     await player.scheduleBuffer(audio.buffer)
     /// }
     /// ```
     ///
-    /// - Parameter buffers: The input, in order.
-    /// - Returns: A stream that reads the buffers when you iterate it.
+    /// - Parameter audio: The input, in order.
+    /// - Returns: A stream that reads the input when you iterate it.
     public func streamIsolation<Source: AsyncSequence>(
-        of buffers: Source
-    ) -> IsolationStream<Source> where Source.Element == AVAudioPCMBuffer {
-        IsolationStream(source: buffers, model: model, sound: sound)
+        of audio: Source
+    ) -> IsolationStream<Source> where Source.Element == AudioInput {
+        IsolationStream(source: audio, model: model, sound: sound)
     }
 
     /// Isolates the sound in one buffer.
     ///
     /// Use this method for audio that is already in memory.
+    /// The isolator reads the buffer before the method first suspends.
     /// For live audio, use ``streamIsolation(of:)``:
     /// separate calls to this method do not share an engine's state,
     /// so the output would be wrong at each boundary between buffers.

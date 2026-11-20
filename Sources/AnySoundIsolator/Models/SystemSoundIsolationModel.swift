@@ -61,10 +61,18 @@ public struct SystemSoundIsolationModel: SoundIsolationModel {
         self.quality = quality
     }
 
+    /// Whether the operating system has the sound isolation audio unit.
     public var availability: Availability<UnavailableReason> {
         SoundIsolationUnit.isInstalled ? .available : .unavailable(.audioUnitNotFound)
     }
 
+    /// Makes an executor that runs one audio unit at the input's sample rate.
+    ///
+    /// The executor takes the input's channels when there are one or two, and one channel otherwise.
+    ///
+    /// - Parameter request: The sound to isolate and the format of the input.
+    /// - Throws: ``SoundIsolationError/unavailableModel(_:)`` when the system has no audio unit,
+    ///   or ``SoundIsolationError/unsupportedConfiguration(_:)`` when the unit refuses the format.
     public func makeExecutor(for request: SoundIsolationRequest) async throws -> any SoundIsolationExecutor {
         guard SoundIsolationUnit.isInstalled else {
             throw SoundIsolationError.unavailableModel(

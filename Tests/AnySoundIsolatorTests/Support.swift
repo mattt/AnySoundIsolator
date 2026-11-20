@@ -144,8 +144,8 @@ enum TestAudio {
     /// Reads all of a file's channels.
     static func read(_ url: URL) async throws -> [[Float]] {
         var channels: [[Float]] = []
-        for try await buffer in AudioFileBuffers(url: url) {
-            let piece = self.channels(buffer)
+        for try await input in AudioFileBuffers(url: url) {
+            let piece = self.channels(input.buffer)
             if channels.isEmpty { channels = Array(repeating: [], count: piece.count) }
             for (index, values) in piece.enumerated() { channels[index] += values }
         }
@@ -166,11 +166,11 @@ enum TestAudio {
     }
 }
 
-/// A sequence of buffers that a closure produces, for tests.
+/// A sequence of inputs that a closure produces from buffers, for tests.
 ///
 /// The closure does not have to be sendable, so it can hold audio buffers.
 struct Buffers: AsyncSequence {
-    typealias Element = AVAudioPCMBuffer
+    typealias Element = AudioInput
     typealias Failure = any Error
 
     let produce: () throws -> AVAudioPCMBuffer?
@@ -189,8 +189,8 @@ struct Buffers: AsyncSequence {
     struct AsyncIterator: AsyncIteratorProtocol {
         let produce: () throws -> AVAudioPCMBuffer?
 
-        mutating func next(isolation actor: isolated (any Actor)? = #isolation) async throws -> AVAudioPCMBuffer? {
-            try produce()
+        mutating func next(isolation actor: isolated (any Actor)? = #isolation) async throws -> AudioInput? {
+            try produce().map { AudioInput(buffer: $0) }
         }
     }
 }

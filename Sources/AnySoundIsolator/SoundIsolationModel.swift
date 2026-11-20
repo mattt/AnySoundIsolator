@@ -48,8 +48,10 @@ public protocol SoundIsolationModel: Sendable {
 }
 
 extension SoundIsolationModel {
+    /// Voice only.
     public var supportedSounds: Set<SoundIsolator.Sound> { [.voice] }
 
+    /// Returns `nil`, for a model that needs no assets.
     public func assetInstallationRequest() async throws -> AssetInstallationRequest? { nil }
 
     /// Whether the model is ready to isolate sound.

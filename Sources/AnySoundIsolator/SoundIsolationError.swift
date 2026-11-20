@@ -29,6 +29,7 @@ public enum SoundIsolationError: Error, Sendable {
 }
 
 extension SoundIsolationError: LocalizedError {
+    /// A description of the error for a person to read.
     public var errorDescription: String? {
         switch self {
         case .unsupportedConfiguration(let reason), .unavailableModel(let reason),
