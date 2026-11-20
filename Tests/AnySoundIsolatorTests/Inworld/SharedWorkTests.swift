@@ -9,13 +9,21 @@
     @Suite struct SharedWorkTests {
         /// An operation that waits until a test lets it continue, and that cancellation does not end.
         final class Gate: Sendable {
-            private let state = Mutex<(isOpen: Bool, waiter: CheckedContinuation<Void, Never>?)>((false, nil))
-            let (started, startedSignal) = AsyncStream<Void>.makeStream()
+            private struct State {
+                var isOpen = false
+                var isWaiting = false
+                var waiter: CheckedContinuation<Void, Never>?
+            }
+
+            private let state = Mutex(State())
+
+            /// Whether the operation has reached the gate, and so is running.
+            var isWaiting: Bool { state.withLock { $0.isWaiting } }
 
             func wait() async {
-                startedSignal.yield()
                 await withCheckedContinuation { continuation in
                     let isOpen = state.withLock { state in
+                        state.isWaiting = true
                         if !state.isOpen { state.waiter = continuation }
                         return state.isOpen
                     }
@@ -23,6 +31,7 @@
                 }
             }
 
+            /// Lets the operation continue. A second call has no effect.
             func open() {
                 let waiter = state.withLock { state in
                     state.isOpen = true
@@ -38,6 +47,8 @@
         @Test func callerDuringACancellationGetsNewWork() async throws {
             let work = SharedWork<Int>()
             let gate = Gate()
+            // A failure below still lets the operation end.
+            defer { gate.open() }
             let secondRuns = Mutex(0)
             let first = Task {
                 try await work.value {
@@ -45,8 +56,7 @@
                     return 1
                 }
             }
-            var started = gate.started.makeAsyncIterator()
-            _ = await started.next()
+            try await waitUntil("the operation starts") { gate.isWaiting }
             first.cancel()
             // The first operation is cancelled and has not stopped.
             #expect(work.isRunning)
@@ -57,7 +67,7 @@
                     return 2
                 }
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await waitUntil("the second caller waits") { work.callerCount == 1 }
             // The second caller waits for the first operation to stop.
             #expect(secondRuns.withLock { $0 } == 0)
 
@@ -72,6 +82,7 @@
         @Test func cancelledCallerDuringACancellationStartsNoWork() async throws {
             let work = SharedWork<Int>()
             let gate = Gate()
+            defer { gate.open() }
             let secondRuns = Mutex(0)
             let first = Task {
                 try await work.value {
@@ -79,8 +90,7 @@
                     return 1
                 }
             }
-            var started = gate.started.makeAsyncIterator()
-            _ = await started.next()
+            try await waitUntil("the operation starts") { gate.isWaiting }
             first.cancel()
             let second = Task {
                 try await work.value {
@@ -88,7 +98,7 @@
                     return 2
                 }
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await waitUntil("the second caller waits") { work.callerCount == 1 }
             second.cancel()
 
             // A cancelled caller returns after the operation stops, so that it leaves none running.
@@ -102,6 +112,7 @@
         @Test func callersAtTheSameTimeShareOneOperation() async throws {
             let work = SharedWork<Int>()
             let gate = Gate()
+            defer { gate.open() }
             let runs = Mutex(0)
             let operation: @Sendable () async throws -> Int = {
                 runs.withLock { $0 += 1 }
@@ -109,10 +120,9 @@
                 return 7
             }
             async let first = work.value(operation: operation)
-            var started = gate.started.makeAsyncIterator()
-            _ = await started.next()
+            try await waitUntil("the operation starts") { gate.isWaiting }
             async let second = work.value(operation: operation)
-            try await Task.sleep(for: .milliseconds(50))
+            try await waitUntil("both callers wait") { work.callerCount == 2 }
             gate.open()
             #expect(try await (first, second) == (7, 7))
             #expect(runs.withLock { $0 } == 1)

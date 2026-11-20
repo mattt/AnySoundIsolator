@@ -154,8 +154,9 @@
             }
         }
 
-        /// A call suspends during a render. A second call that starts then waits for the first,
+        /// Two calls that wait at the same time run one at a time,
         /// so the two together give the output of two calls in a row.
+        /// Each call suspends during its render, so without the queue the second could start then.
         @Test func overlappingCallsRunOneAtATime() async throws {
             try await withTemporaryDirectory { directory in
                 let checkpoint = directory.appending(path: "small.safetensors")
@@ -171,15 +172,22 @@
                 let expectedRest = try await inOrder.finish().channels[0]
                 #expect(expected.count + expectedRest.count == 14_000)
 
-                for _ in 0 ..< 5 {
-                    let executor = try await model.makeExecutor(for: request)
-                    async let first = executor.process(piece)
-                    async let second = executor.process(piece)
-                    let (one, two) = try await (first.channels[0], second.channels[0])
-                    // The pieces are equal, so either call can be the first to run.
-                    #expect(one + two == expected || two + one == expected)
-                    #expect(try await executor.finish().channels[0] == expectedRest)
-                }
+                let executor = try #require(
+                    try await model.makeExecutor(for: request) as? InworldSoundIsolationExecutor
+                )
+                // The test holds the queue until both calls wait, so the calls overlap.
+                try await executor.admission.enter()
+                var isHeld = true
+                defer { if isHeld { executor.admission.leave() } }
+                async let first = executor.process(piece)
+                async let second = executor.process(piece)
+                try await waitUntil("both calls wait") { executor.admission.waitingCount == 2 }
+                executor.admission.leave()
+                isHeld = false
+                let (one, two) = try await (first.channels[0], second.channels[0])
+                // The pieces are equal, so either call can be the first to run.
+                #expect(one + two == expected || two + one == expected)
+                #expect(try await executor.finish().channels[0] == expectedRest)
             }
         }
 

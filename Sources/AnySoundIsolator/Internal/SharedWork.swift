@@ -33,6 +33,9 @@
         /// Whether the operation is running.
         var isRunning: Bool { state.withLock { $0.task != nil } }
 
+        /// The number of callers that wait, for the operation or for new work.
+        var callerCount: Int { state.withLock { $0.waiters.count + $0.next.count } }
+
         /// Waits for the operation, and starts it when it is not running.
         func value(operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
             do {
