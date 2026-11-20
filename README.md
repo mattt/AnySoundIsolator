@@ -228,7 +228,8 @@ selects a mono downmix by default or one audio unit per channel with `perChannel
 In a live stream, each frame waits for the audio that follows it.
 Samples can differ across runs.
 On macOS 27 virtual machines, two runs differed in most samples
-but kept the same length, timing, and level.
+but kept the same length and timing.
+With standard quality, their levels differed by 19 percent.
 
 #### Performance
 
