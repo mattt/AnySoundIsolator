@@ -101,7 +101,9 @@ public struct SoundIsolationRequest: Sendable, Hashable {
 /// If you call an executor yourself, follow the same rule,
 /// because the result of overlapping calls on an executor is not defined in general.
 /// The executors of this package's models are safe to call from more than one task:
-/// they run overlapping calls one at a time, in the order in which the calls arrive.
+/// they run overlapping calls one at a time.
+/// They do not define which of two competing calls runs first,
+/// so give the pieces of a stream from one task, in order.
 ///
 /// An executor does not align or trim its output.
 /// It states its ``latency``, and the isolator removes that many frames from the start
@@ -129,6 +131,10 @@ public protocol SoundIsolationExecutor: Sendable {
     ///
     /// - Parameter input: The next frames of the input.
     /// - Returns: Isolated audio, which can have any number of frames.
+    /// - Throws: A ``SoundIsolationError`` when the input or the engine fails,
+    ///   or `CancellationError` when the task is cancelled.
+    ///   The isolator wraps any other error in ``SoundIsolationError/backendFailure(underlying:)``.
+    ///   After an error, the isolator makes no more calls to the executor.
     func process(_ input: AudioSamples) async throws -> AudioSamples
 
     /// Returns the output that remains after the last input.
@@ -137,5 +143,8 @@ public protocol SoundIsolationExecutor: Sendable {
     /// so the executor can return less than its latency here.
     ///
     /// - Returns: The rest of the isolated audio.
+    /// - Throws: A ``SoundIsolationError`` when the engine fails,
+    ///   or `CancellationError` when the task is cancelled.
+    ///   The isolator wraps any other error in ``SoundIsolationError/backendFailure(underlying:)``.
     func finish() async throws -> AudioSamples
 }
