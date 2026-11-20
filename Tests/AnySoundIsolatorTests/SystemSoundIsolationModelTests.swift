@@ -121,6 +121,39 @@ struct SystemSoundIsolationModelTests {
         #expect(calls == 1)
     }
 
+    /// The executor is public, so a caller can give it audio that the isolator would never give.
+    /// The unit reads every channel by the length of the first, so the executor checks the input first.
+    @Test func executorRefusesAudioThatDoesNotMatchIt() async throws {
+        let model = SystemSoundIsolationModel(quality: .standard)
+        let executor = try await model.makeExecutor(
+            for: SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+        )
+        let voice = TestAudio.voice(seconds: 0.1)
+        await #expect {
+            _ = try await executor.process(AudioSamples(channels: [voice, voice]))
+        } throws: { error in
+            guard case SoundIsolationError.invalidAudio = error else { return false }
+            return true
+        }
+
+        // `channels` can change after the initializer checked the lengths.
+        var unequal = AudioSamples(channels: [voice])
+        unequal.channels.append(Array(voice.prefix(10)))
+        let stereo = try await model.makeExecutor(
+            for: SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 2)
+        )
+        await #expect {
+            _ = try await stereo.process(unequal)
+        } throws: { error in
+            guard case SoundIsolationError.invalidAudio = error else { return false }
+            return true
+        }
+        // A refused input does not reach the unit, so the executor still works.
+        let output = try await stereo.process(AudioSamples(channels: [voice, voice]))
+        #expect(output.channelCount == 2)
+        #expect(output.frameCount == voice.count)
+    }
+
     @Test func threeChannelsAreDownmixedByDefault() async throws {
         let input = (1 ... 3).map { TestAudio.voice(seconds: 1, seed: UInt64($0)) }
         let isolator = SoundIsolator()

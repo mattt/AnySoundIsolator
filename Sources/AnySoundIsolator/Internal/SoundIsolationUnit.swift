@@ -250,7 +250,22 @@ final class SoundIsolationUnit {
     ///     the unit reads silence after them.
     ///   - frameCount: The number of frames to render.
     /// - Returns: The next `frameCount` frames of the unit's output.
+    /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the input does not have the unit's channel count
+    ///   or its channels have different lengths, before the unit reads it.
     func render(_ input: AudioSamples, frameCount: Int) throws -> AudioSamples {
+        // The render callback copies the same number of frames from each channel,
+        // so a short channel would be read past its end.
+        // `AudioSamples.channels` is a public property, so its lengths can differ.
+        guard input.channelCount == channelCount else {
+            throw SoundIsolationError.invalidAudio(
+                "The system executor takes \(channelCount) channels, and the input has \(input.channelCount)."
+            )
+        }
+        guard input.hasEqualChannelLengths else {
+            throw SoundIsolationError.invalidAudio(
+                "The input has channels with \(input.channels.map(\.count)) samples, which are not equal."
+            )
+        }
         var result = AudioSamples(channelCount: channelCount)
         for index in result.channels.indices {
             result.channels[index].reserveCapacity(frameCount)
