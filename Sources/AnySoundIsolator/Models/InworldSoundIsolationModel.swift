@@ -44,7 +44,7 @@
     /// because Metal compiles the network's GPU kernels or reads them from its cache for the app.
     /// With an empty cache, the first render took about 2.4 seconds longer.
     /// To keep that time away from the user's first recording,
-    /// isolate a tenth of a second of silence with ``SoundIsolator/isolate(_:options:isolation:)``
+    /// isolate a tenth of a second of silence with ``SoundIsolator/isolate(_:options:)``
     /// after the app starts.
     ///
     /// The trait supports macOS on Apple silicon.

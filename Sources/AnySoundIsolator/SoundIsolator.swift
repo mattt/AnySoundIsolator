@@ -224,7 +224,8 @@ public struct SoundIsolator: Sendable {
     /// Isolates the sound in one buffer.
     ///
     /// Use this method for audio that is already in memory.
-    /// The isolator reads the buffer before the method first suspends.
+    /// The method runs on the caller's actor until it first suspends,
+    /// and it reads the buffer before then, so the buffer does not cross to another actor.
     /// For live audio, use ``streamIsolation(of:options:)``:
     /// separate calls to this method do not share an engine's state,
     /// so the output would be wrong at each boundary between buffers.
@@ -232,13 +233,11 @@ public struct SoundIsolator: Sendable {
     /// - Parameters:
     ///   - buffer: Audio in any PCM format.
     ///   - options: Options for this buffer, such as the channel policy.
-    ///   - actor: The actor that the caller runs on. Leave the default.
     /// - Returns: The isolated sound and the source, both as long as the buffer.
     /// - Throws: A ``SoundIsolationError``, or `CancellationError`.
-    public func isolate(
+    nonisolated(nonsending) public func isolate(
         _ buffer: AVAudioPCMBuffer,
-        options: IsolationOptions = IsolationOptions(),
-        isolation actor: isolated (any Actor)? = #isolation
+        options: IsolationOptions = IsolationOptions()
     ) async throws -> IsolatedAudio {
         try Task.checkCancellation()
         var intake = Intake()
