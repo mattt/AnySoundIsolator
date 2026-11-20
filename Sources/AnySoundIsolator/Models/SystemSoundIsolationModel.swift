@@ -28,9 +28,10 @@ import AudioToolbox
 /// The audio unit delays its output by about 93 ms in high quality and 56 ms in standard quality,
 /// and by more for stereo.
 /// The isolator removes the delay that the unit reports.
-/// At a sample rate that does not divide 48,000, such as 44.1 kHz,
-/// the delay is not a whole number of frames,
-/// so the output can be off the input's timeline by less than one frame.
+/// The package rounds that delay to a whole frame.
+/// Where the delay is not a whole number of frames,
+/// such as at 44.1 kHz, or at 16 kHz with standard quality,
+/// the output can be off the input's timeline by less than one frame.
 ///
 /// The audio unit does not always give the same samples for the same audio.
 /// On an Apple M4 Max with macOS 27, a buffer, a stream, and a file of the same audio gave the same samples.

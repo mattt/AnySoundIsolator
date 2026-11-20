@@ -45,17 +45,19 @@ try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
 The request downloads and verifies one 256 MB file in the Hugging Face cache.
-In a sandboxed app, the file goes into the app's container.
+In a sandboxed app, the file goes into the app's container
+unless `HF_HUB_CACHE` or `HF_HOME` names another directory.
 
 On 2026-11-20, an Apple M4 Max processed about 10 seconds of audio per second.
 Peak memory use was 4.2 to 4.6 GB.
 The network works in windows of 8 seconds,
-so a stream receives its first frames after 8 seconds of input.
+so a stream receives its first frames after 8 seconds of input,
+or at the end of a shorter input.
 File and stream input produce the same frames for the same audio.
 
 The trait supports macOS on Apple silicon.
 The model compiles for iOS, but it is not run there,
-and one window needs more memory than iOS gives to most apps.
+and its memory use on a Mac is likely more than iOS gives to most apps.
 Only documentation built with the trait includes the model's symbols.
 
 ## Topics

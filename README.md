@@ -111,7 +111,8 @@ for try await audio in isolator.streamIsolation(of: buffers) {
 The isolator reads on demand and has no input queue.
 If capture outpaces isolation, the example's `AsyncStream` buffers without limit.
 To limit it, give `makeStream` a buffering policy, such as `.bufferingNewest(8)`;
-the stream then drops audio, and the output has a gap in time where the audio was dropped.
+the stream then drops audio.
+The output continues without the dropped audio, and its frame positions stay consecutive.
 
 Supply your own capture in any PCM format and use that format throughout the stream.
 Output is deinterleaved Float32 at the input's sample rate and channel count.
@@ -258,20 +259,23 @@ the offline checkpoint of [Inworld's Voice Isolator](https://github.com/inworld-
 in a Swift port for MLX.
 See [Limitations](#limitations).
 
-**Output.** The port gives the output of Inworld's reference renders.
+**Output.** The port matches Inworld's reference renders within Inworld's 1e-4 tolerance.
 On the GPU, maximum file API errors for the two golden fixtures were
-4.2e-7 for 3 seconds and 5.4e-7 for 11 seconds, within Inworld's 1e-4 tolerance.
+4.2e-7 for 3 seconds and 5.4e-7 for 11 seconds.
 
 **Assets.** The model uses `denoiser.safetensors` (256,260,128 bytes)
 from [`inworld/voice-isolator`](https://huggingface.co/inworld/voice-isolator) on Hugging Face.
-`assetInstallationRequest()` returns a request and downloads nothing.
+`assetInstallationRequest()` downloads nothing.
+It returns a request, or `nil` when the model is ready.
+It throws on hardware that cannot run the model or when a file that you supply is missing.
 Call `downloadAndInstall()` to fetch the pinned revision,
 verify its size and SHA-256 digest, and record verification.
 
-The file goes into the Hugging Face cache, which other tools share:
-`~/.cache/huggingface/hub`, or the directory that `HF_HUB_CACHE` or `HF_HOME` names.
+The file goes into the Hugging Face cache, which other tools share.
+The cache is the directory that `HF_HUB_CACHE` names, or else `hub` in the directory that `HF_HOME` names,
+or else `~/.cache/huggingface/hub`.
 A file that is already in the cache is verified and not downloaded again.
-A sandboxed app keeps the file in its container,
+Without those variables, a sandboxed app keeps the file in its container,
 in `Application Support/AnySoundIsolator/HuggingFace/hub`, which the package excludes from backups.
 Besides App Sandbox, only downloading requires an entitlement for outgoing network connections.
 Pass `assets: .file(url)` to use your own file without downloading or checking its digest.
@@ -283,12 +287,14 @@ The default [channel policy](#stereo-input-and-a-mono-engine) gives stereo the s
 **Windows.** The network uses 8-second windows with a 2-second overlap.
 Inworld's offline render places the windows with the length of the clip known:
 every window is a full one, and the last window ends at the end of the clip.
+A clip shorter than 8 seconds is one short window.
 A stream returns the first 6 seconds and holds the 2-second crossfade
 until the next window or end of input.
 This matches Inworld's placement without knowing the length in advance.
 What differs is when the frames arrive:
 the first frames come after 8 seconds of input, then 6 seconds of output for each 6 seconds of input,
 and the rest after the input ends.
+A stream shorter than 8 seconds returns all of its frames after the input ends.
 In tests, a file, a single buffer, and streams of several buffer sizes
 produced a sample difference of exactly 0.
 Use the system model for live conversation.
@@ -310,8 +316,9 @@ Before integration, MLX used about 3.6 GB of GPU memory at peak for one window.
 Open streams keep the 256 MB weights loaded and shared, rendering windows in turn.
 
 MLX caches freed GPU buffers without a limit by default.
-While a stream is open, the package limits that cache to 512 MB,
+While a stream is open, the package lowers that limit to 512 MiB,
 and it restores the earlier limit afterward.
+It leaves a lower limit alone, and it keeps a limit that the app sets in the meantime.
 This process-wide limit also applies to other MLX code.
 Without it, a one-minute render used 5.5 GB and ran 3 percent faster.
 
@@ -332,14 +339,14 @@ _ = try await isolator.isolate(silence)
 This took 2.6 s with an empty cache and 0.05 s on later launches.
 
 **Platforms.** The trait supports macOS on Apple silicon.
-The library also compiles for iOS with the trait, but nobody has run it there,
-and the memory for one window is more than iOS gives to most apps,
+The library also compiles for iOS with the trait, but nobody has run it there.
+On a Mac, the process used more than 4 GB, which is likely more than iOS gives to most apps,
 so do not rely on the model on iOS.
 
 **Toolchain.** Command-line builds need SwiftPM support for MLX's Metal shaders.
 Builds used Swift 6.4.2.
 MLX Swift 0.31.6 and later need Swift 6.3.
-Xcode also builds MLX Swift 0.31.4, which gave the same parity (4.2e-7 and 6.0e-7).
+Xcode also builds MLX Swift 0.31.4, which gave maximum errors of 4.2e-7 and 6.0e-7, also within the tolerance.
 Install the Metal toolchain with `xcodebuild -downloadComponent MetalToolchain`.
 `mise run build:mlx` locates it.
 
@@ -402,9 +409,10 @@ If files are missing, `makeExecutor(for:)` throws `SoundIsolationError.missingAs
   and compare Inworld output with its reference renders.
 - The package does not have Inworld's realtime checkpoint.
 - Inworld is untested on an Intel Mac or with less than 36 GB of memory.
-- At a sample rate that does not divide 48,000, such as 44.1 kHz,
-  the audio unit's delay is not a whole number of frames,
-  so the output can be off the input's timeline by less than one frame.
+- The audio unit reports a delay of 92.5 ms for high quality and about 56.35 ms for standard quality in mono.
+  The package rounds it to a whole frame.
+  Where it is not a whole number of frames, such as at 44.1 kHz, or at 16 kHz with standard quality,
+  the output can be off the input's timeline by less than one frame.
 - With the standard quality, the measured delay of the isolated voice
   was one frame less than the delay that the audio unit reports.
 - Extract the audio from video files before isolation.
@@ -435,8 +443,9 @@ MLX tasks require Apple silicon and the Metal toolchain.
 `Package.resolved` pins dependencies with the `MLX` trait enabled.
 SwiftPM saves pins for the current build's traits,
 so `swift build` or `swift run` without the trait rewrites the file in a checkout.
-The build, test, and run tasks pass `--only-use-versions-from-resolved-file`,
+The tasks that build, test, or run with SwiftPM pass `--only-use-versions-from-resolved-file`,
 which makes SwiftPM read the file and not write it.
+`build:ios` uses `xcodebuild` and does not pass the flag.
 To update a version, run `xcrun swift package --traits MLX update` and commit the file.
 
 The tests compile the examples in
