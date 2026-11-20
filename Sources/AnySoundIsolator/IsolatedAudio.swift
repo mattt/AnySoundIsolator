@@ -18,7 +18,9 @@ import CoreMedia
 /// After a downmix, ``buffer`` has the same samples in every channel,
 /// and the background keeps the differences between the channels of ``source``.
 ///
-/// The package makes the buffers and does not change them afterward.
+/// The value owns its buffers: the package makes them, or the initializer copies yours,
+/// and the package does not change them afterward.
+/// The buffers are objects that can change, and the type does not prevent that.
 /// Do not change them if you share the value between tasks.
 public struct IsolatedAudio: @unchecked Sendable {
     /// The isolated sound.
@@ -31,21 +33,37 @@ public struct IsolatedAudio: @unchecked Sendable {
     /// counted in frames from the start of the stream or file.
     public let framePosition: AVAudioFramePosition
 
-    /// Creates a piece of isolated sound.
+    /// Creates a piece of isolated sound with copies of two buffers.
+    ///
+    /// Both buffers must hold deinterleaved Float32 audio
+    /// with the same sample rate, channel count, and length.
+    /// Another format stops the program, because the mix of the two buffers would be wrong.
+    /// The initializer copies the samples, so you can reuse the buffers afterward.
     ///
     /// - Parameters:
     ///   - buffer: The isolated sound, as deinterleaved Float32 audio.
     ///   - source: The input frames, in the same format and with the same length.
     ///   - framePosition: The position of the first frame on the input's timeline.
     public init(buffer: AVAudioPCMBuffer, source: AVAudioPCMBuffer, framePosition: AVAudioFramePosition) {
+        self.init(owning: PCM.copy(of: buffer), source: PCM.copy(of: source), framePosition: framePosition)
+    }
+
+    /// Wraps buffers that the package made and that nothing else holds.
+    init(owning buffer: AVAudioPCMBuffer, source: AVAudioPCMBuffer, framePosition: AVAudioFramePosition) {
         precondition(
             buffer.frameLength == source.frameLength && buffer.format.channelCount == source.format.channelCount,
             "The isolated sound and its source must have the same length and channel count."
         )
         precondition(
-            buffer.floatChannelData != nil && source.floatChannelData != nil,
-            "The buffers must hold Float32 samples."
+            buffer.format.sampleRate == source.format.sampleRate,
+            "The isolated sound and its source must have the same sample rate."
         )
+        for format in [buffer.format, source.format] {
+            precondition(
+                format.commonFormat == .pcmFormatFloat32 && (!format.isInterleaved || format.channelCount == 1),
+                "The buffers must hold deinterleaved Float32 samples."
+            )
+        }
         self.buffer = buffer
         self.source = source
         self.framePosition = framePosition

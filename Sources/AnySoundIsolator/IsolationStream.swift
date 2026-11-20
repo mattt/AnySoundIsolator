@@ -83,7 +83,7 @@ extension IsolatedAudio {
     /// Makes buffers from samples in a deinterleaved Float32 format.
     init(_ samples: IsolatedSamples, format: AVAudioFormat) throws {
         self.init(
-            buffer: try PCM.buffer(from: samples.isolated, format: format),
+            owning: try PCM.buffer(from: samples.isolated, format: format),
             source: try PCM.buffer(from: samples.source, format: format),
             framePosition: AVAudioFramePosition(samples.position)
         )

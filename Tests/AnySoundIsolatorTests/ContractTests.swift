@@ -192,6 +192,46 @@ import Testing
         #expect(result.isolated[0] == (1 ... 5).flatMap { Array(repeating: Float($0), count: 100) })
     }
 
+    /// A change to the caller's buffer after it is wrapped, and before the stream reads the input,
+    /// does not reach the stream.
+    @Test func inputKeepsItsAudioWhenTheBufferChangesLater() async throws {
+        let original = TestAudio.voice(seconds: 0.1)
+        let shared = try TestAudio.buffer([original])
+        let input = AudioInput(buffer: shared)
+        let data = try #require(shared.floatChannelData)[0]
+        for index in 0 ..< Int(shared.frameLength) { data[index] = 9 }
+        shared.frameLength = 1
+
+        #expect(TestAudio.channels(input.buffer) == [original])
+        let (stream, continuation) = AsyncStream<AudioInput>.makeStream()
+        continuation.yield(input)
+        continuation.finish()
+        let isolator = SoundIsolator(model: StandInModel(gain: 1))
+        let result = try await TestAudio.collect(isolator.streamIsolation(of: stream))
+        #expect(result.isolated == [original])
+        #expect(result.source == [original])
+    }
+
+    /// A result that a caller makes holds copies, so the caller can reuse its buffers.
+    @Test func resultCopiesTheBuffersOfItsInitializer() async throws {
+        let isolated: [Float] = [0.5, 0.25, -0.5]
+        let original: [Float] = [1, 0.5, -1]
+        let buffer = try TestAudio.buffer([isolated])
+        let source = try TestAudio.buffer([original])
+        let audio = IsolatedAudio(buffer: buffer, source: source, framePosition: 7)
+        for changed in [buffer, source] {
+            let data = try #require(changed.floatChannelData)[0]
+            for index in 0 ..< 3 { data[index] = 9 }
+        }
+
+        #expect(audio.buffer !== buffer)
+        #expect(audio.source !== source)
+        #expect(TestAudio.channels(audio.buffer) == [isolated])
+        #expect(TestAudio.channels(audio.source) == [original])
+        #expect(TestAudio.channels(audio.background()) == [[0.5, 0.25, -0.5]])
+        #expect(audio.framePosition == 7)
+    }
+
     @Test func emptyInputGivesNoOutput() async throws {
         let isolator = SoundIsolator(model: StandInModel())
         let result = try await TestAudio.collect(isolator.streamIsolation(of: Buffers([])))

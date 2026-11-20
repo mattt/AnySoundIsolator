@@ -64,6 +64,27 @@ enum PCM {
         return format
     }
 
+    /// Returns a new buffer with a copy of a buffer's audio, in any PCM format.
+    static func copy(of buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        guard
+            let copy = AVAudioPCMBuffer(
+                pcmFormat: buffer.format,
+                frameCapacity: max(buffer.frameLength, 1)
+            )
+        else {
+            preconditionFailure("An audio buffer could not be allocated.")
+        }
+        copy.frameLength = buffer.frameLength
+        let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+        for (from, to) in zip(source, destination) {
+            if let bytes = from.mData, let target = to.mData {
+                target.copyMemory(from: bytes, byteCount: Int(min(from.mDataByteSize, to.mDataByteSize)))
+            }
+        }
+        return copy
+    }
+
     /// Copies the samples of a deinterleaved Float32 buffer.
     static func samples(from buffer: AVAudioPCMBuffer) -> AudioSamples {
         let frameCount = Int(buffer.frameLength)

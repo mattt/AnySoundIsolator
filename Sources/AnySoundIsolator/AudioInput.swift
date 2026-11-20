@@ -25,23 +25,7 @@ public struct AudioInput: @unchecked Sendable {
     ///
     /// - Parameter buffer: Audio in any PCM format. You can reuse the buffer afterward.
     public init(buffer: AVAudioPCMBuffer) {
-        guard
-            let copy = AVAudioPCMBuffer(
-                pcmFormat: buffer.format,
-                frameCapacity: max(buffer.frameLength, 1)
-            )
-        else {
-            preconditionFailure("An audio buffer could not be allocated.")
-        }
-        copy.frameLength = buffer.frameLength
-        let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-        let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-        for (from, to) in zip(source, destination) {
-            if let bytes = from.mData, let target = to.mData {
-                target.copyMemory(from: bytes, byteCount: Int(min(from.mDataByteSize, to.mDataByteSize)))
-            }
-        }
-        self.buffer = copy
+        self.buffer = PCM.copy(of: buffer)
     }
 
     /// Wraps a buffer that the package made and that nothing else holds.
