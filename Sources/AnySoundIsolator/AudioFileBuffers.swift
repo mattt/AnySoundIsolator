@@ -36,10 +36,14 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
     }
 
     /// Reads the file one block at a time.
+    ///
+    /// After the end of the file or an error, the iterator closes the file,
+    /// and each later call to ``next(isolation:)`` returns `nil`.
     public struct AsyncIterator: AsyncIteratorProtocol {
         let url: URL
         let blockSize: AVAudioFrameCount
         private var file: AVAudioFile?
+        private var isFinished = false
 
         init(url: URL, blockSize: AVAudioFrameCount) {
             self.url = url
@@ -49,12 +53,31 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
         /// Reads the next block of the file.
         ///
         /// - Parameter actor: The actor that the caller runs on.
-        /// - Returns: The next block, or `nil` at the end of the file.
+        /// - Returns: The next block, or `nil` at the end of the file and after an error.
         /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the file cannot be read
         ///   or ends before the number of frames that it states, or `CancellationError`.
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> AudioInput? {
+            guard !isFinished else { return nil }
+            do {
+                let input = try read()
+                if input == nil { finish() }
+                return input
+            } catch {
+                finish()
+                throw error
+            }
+        }
+
+        /// Ends the iteration and closes the file.
+        private mutating func finish() {
+            isFinished = true
+            file = nil
+        }
+
+        /// Reads the next block, or returns `nil` at the end of the file.
+        private mutating func read() throws -> AudioInput? {
             try Task.checkCancellation()
             let file = try self.file ?? AudioFile.open(url)
             self.file = file

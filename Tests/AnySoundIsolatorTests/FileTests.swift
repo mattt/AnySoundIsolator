@@ -450,4 +450,45 @@ import Testing
             }
         }
     }
+
+    /// The file iterator ends for good after an error or the end of the file,
+    /// as `AsyncIteratorProtocol` requires.
+    @Test func fileIteratorStaysFinished() async throws {
+        let (directory, source, _) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // After an error, the iterator does not try again, even when the file appears.
+        let missing = directory.appending(path: "missing.wav")
+        var failed = AudioFileBuffers(url: missing).makeAsyncIterator()
+        await #expect {
+            _ = try await failed.next()
+        } throws: { error in
+            guard case SoundIsolationError.invalidAudio = error else { return false }
+            return true
+        }
+        try FileManager.default.copyItem(at: source, to: missing)
+        #expect(try await failed.next() == nil)
+
+        // After the end, a cancelled task gets `nil`, not `CancellationError`.
+        let frames = try await Task {
+            var iterator = AudioFileBuffers(url: source, blockSize: 40_000).makeAsyncIterator()
+            var frames = 0
+            while let input = try await iterator.next() {
+                frames += Int(input.buffer.frameLength)
+            }
+            withUnsafeCurrentTask { $0?.cancel() }
+            #expect(try await iterator.next() == nil)
+            return frames
+        }.value
+        #expect(frames == 96_000)
+
+        // Cancellation is an error that ends the iteration too.
+        let afterCancellation = try await Task {
+            var iterator = AudioFileBuffers(url: source).makeAsyncIterator()
+            withUnsafeCurrentTask { $0?.cancel() }
+            await #expect(throws: CancellationError.self) { _ = try await iterator.next() }
+            return try await iterator.next() == nil
+        }.value
+        #expect(afterCancellation)
+    }
 }
