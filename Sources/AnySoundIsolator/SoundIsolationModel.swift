@@ -95,7 +95,13 @@ public struct SoundIsolationRequest: Sendable, Hashable {
 ///
 /// The isolator calls ``process(_:)`` with consecutive pieces of the input,
 /// then ``finish()`` once.
-/// The calls never overlap.
+/// The isolator's calls never overlap: it waits for one call to return before it makes the next.
+/// An executor that you write does not need to support overlapping calls.
+///
+/// If you call an executor yourself, follow the same rule,
+/// because the result of overlapping calls on an executor is not defined in general.
+/// The executors of this package's models are safe to call from more than one task:
+/// they run overlapping calls one at a time, in the order in which the calls arrive.
 ///
 /// An executor does not align or trim its output.
 /// It states its ``latency``, and the isolator removes that many frames from the start

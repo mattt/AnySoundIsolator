@@ -199,6 +199,11 @@
     }
 
     /// Runs the windows of one stream through a loaded checkpoint.
+    ///
+    /// A call suspends while the runtime renders a window, and an actor lets another call start then.
+    /// The executor makes a call wait until the calls before it return,
+    /// so overlapping calls run one at a time in the order in which they arrive,
+    /// and no window is rendered twice.
     actor InworldSoundIsolationExecutor: SoundIsolationExecutor {
         nonisolated let sampleRate: Double
         nonisolated let channelCount = 1
@@ -206,6 +211,10 @@
         nonisolated let latency = 0
         private let runtime: InworldRuntime
         private var assembler: InworldWindowAssembler
+        /// Whether a call is in progress.
+        private var isBusy = false
+        /// The calls that wait for the call in progress, in the order in which they arrived.
+        private var waiting: [CheckedContinuation<Void, Never>] = []
 
         init(runtime: InworldRuntime) {
             self.runtime = runtime
@@ -213,8 +222,33 @@
             assembler = InworldWindowAssembler(chunk: runtime.chunk, overlap: runtime.overlap)
         }
 
+        /// Waits for the calls that arrived earlier.
+        private func enter() async {
+            guard isBusy else {
+                isBusy = true
+                return
+            }
+            await withCheckedContinuation { waiting.append($0) }
+        }
+
+        /// Lets the next call start.
+        private func leave() {
+            if waiting.isEmpty {
+                isBusy = false
+            } else {
+                waiting.removeFirst().resume()
+            }
+        }
+
         /// Collects the input and renders each window that is complete.
         func process(_ input: AudioSamples) async throws -> AudioSamples {
+            guard input.channelCount == 1 else {
+                throw SoundIsolationError.invalidAudio(
+                    "The Inworld executor takes one channel, and the input has \(input.channelCount)."
+                )
+            }
+            await enter()
+            defer { leave() }
             let samples = input.channels[0]
             guard samples.allSatisfy(\.isFinite) else {
                 throw SoundIsolationError.invalidAudio("The audio contains NaN or infinite samples.")
@@ -230,6 +264,8 @@
 
         /// Renders the window that ends at the end of the stream.
         func finish() async throws -> AudioSamples {
+            await enter()
+            defer { leave() }
             try Task.checkCancellation()
             var voice: [Float]?
             if let window = assembler.lastWindow() {
