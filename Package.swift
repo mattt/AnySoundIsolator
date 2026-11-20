@@ -7,7 +7,7 @@ let package = Package(
     platforms: [.macOS(.v26), .iOS(.v26)],
     products: [
         .library(name: "AnySoundIsolator", targets: ["AnySoundIsolator"]),
-        .executable(name: "hush", targets: ["hush"]),
+        .executable(name: "silence", targets: ["silence"]),
     ],
     traits: [
         .trait(
@@ -33,7 +33,7 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "hush",
+            name: "silence",
             dependencies: [
                 "AnySoundIsolator",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),

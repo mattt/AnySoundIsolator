@@ -3,9 +3,9 @@ import Darwin
 import Foundation
 
 @main
-struct Hush: AsyncParsableCommand {
+struct Silence: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "hush",
+        commandName: "silence",
         abstract: "Isolate a sound, such as a voice, in a local audio file.",
         discussion: "SIGINT and SIGTERM cancel the operation and remove unfinished output files.",
         subcommands: [Isolate.self, Prepare.self, Status.self],

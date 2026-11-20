@@ -7,11 +7,11 @@ description = "Resolve Swift package dependencies"
 run = "mise run _swift -- package resolve"
 
 [tasks.build]
-description = "Build the library and the hush command"
+description = "Build the library and the silence command"
 run = "mise run _swift -- build"
 
 [tasks."build:mlx"]
-description = "Build the library and the hush command with the MLX trait, which adds the Inworld model"
+description = "Build the library and the silence command with the MLX trait, which adds the Inworld model"
 run = "mise run _swift:mlx -- build --traits MLX"
 
 [tasks."build:mlx:ios"]
@@ -43,7 +43,7 @@ run = "scripts/fetch-fixtures.sh"
 
 [tasks."prepare:inworld"]
 description = "Download and verify the Inworld checkpoint (256 MB) in the Hugging Face cache"
-run = "mise run _swift:mlx -- run --traits MLX hush prepare --model inworld"
+run = "mise run _swift:mlx -- run --traits MLX silence prepare --model inworld"
 
 [tasks.lint]
 description = "Check the formatting of the Swift sources"

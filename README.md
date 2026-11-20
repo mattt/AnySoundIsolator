@@ -389,21 +389,22 @@ instead of downloading.
 
 ## Command-line tool
 
-The `hush` executable isolates the voice in a local file:
+The `silence` executable isolates the voice in a local file.
+Its name says what it does: it silences everything except the sound that you want.
 
 ```console
-$ swift run hush recording.m4a voice.wav
-$ swift run hush isolate recording.m4a voice.m4a --background rest.m4a --quality standard
-$ swift run hush status
+$ swift run silence recording.m4a voice.wav
+$ swift run silence isolate recording.m4a voice.m4a --background rest.m4a --quality standard
+$ swift run silence status
 ```
 
-With the `MLX` trait, `hush` also has the Inworld model.
+With the `MLX` trait, `silence` also has the Inworld model.
 `prepare` downloads and verifies its file, or only verifies a file that is already in the Hugging Face cache:
 
 ```console
-$ swift run --traits MLX hush prepare --model inworld
-$ swift run --traits MLX hush recording.m4a voice.wav --model inworld
-$ swift run --traits MLX hush status --model inworld
+$ swift run --traits MLX silence prepare --model inworld
+$ swift run --traits MLX silence recording.m4a voice.wav --model inworld
+$ swift run --traits MLX silence status --model inworld
 ```
 
 `isolate` is the default subcommand.
@@ -412,11 +413,11 @@ $ swift run --traits MLX hush status --model inworld
 when the model takes fewer channels than the file has.
 `prepare` installs the files that a model needs; isolation never downloads.
 `status` reports whether the model can run and has its files, without downloading.
-Run `swift run hush --help` for all options.
+Run `swift run silence --help` for all options.
 
 ## Performance
 
-We measured a release build of `hush` with the system model on an M4 Max with macOS 27.0,
+We measured a release build of `silence` with the system model on an M4 Max with macOS 27.0,
 on 10 minutes of 48 kHz audio made in code.
 Both qualities took about the same time.
 
@@ -457,9 +458,9 @@ The MLX tasks need Apple silicon and the Metal toolchain.
 | Task | Description |
 | --- | --- |
 | `mise run setup` | Resolve package dependencies. |
-| `mise run build` | Build the library and the `hush` command. |
+| `mise run build` | Build the library and the `silence` command. |
 | `mise run build:ios` | Compile the library for iOS. |
-| `mise run build:mlx` | Build the library and `hush` with the `MLX` trait. |
+| `mise run build:mlx` | Build the library and `silence` with the `MLX` trait. |
 | `mise run build:mlx:ios` | Compile the library for iOS with the `MLX` trait. |
 | `mise run test` | Run the tests, which make their own audio. |
 | `mise run test:mlx` | Run the tests with the `MLX` trait and its GPU tests, without a download. |
