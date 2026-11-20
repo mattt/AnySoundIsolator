@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions: {}
+
+jobs:
+  test-macos:
+    permissions:
+      contents: read
+    name: Swift ${{ matrix.swift }} on macOS ${{ matrix.macos }} with Xcode ${{ matrix.xcode }}
+    runs-on: ${{ matrix.runner }}
+    env:
+      DEVELOPER_DIR: "/Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - macos: "26"
+            runner: macos-26
+            swift: "6.2"
+            xcode: "26.0"
+          - macos: "26"
+            runner: macos-26
+            swift: "6.3"
+            xcode: "26.6"
+          - macos: "27"
+            runner: xcode-27
+            swift: "6.4"
+            xcode: "27.0"
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode }}-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode }}-spm-
+
+      - name: Lint
+        run: swift format lint --strict --recursive .
+
+      - name: Build
+        run: swift build --build-tests
+
+      # The tests make their own audio and use the system's audio unit.
+      # They download nothing and use no secrets.
+      - name: Test
+        run: swift test --skip-build
+
+  test-mlx:
+    permissions:
+      contents: read
+    name: Swift 6.4 with MLX on Xcode 27
+    # Swift 6.4's default build system compiles MLX's Metal shaders.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+
+      - name: Identify Xcode build
+        id: xcode
+        run: echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Metal toolchain download
+        id: metal-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/metal-toolchain
+          key: ${{ runner.os }}-${{ runner.arch }}-metal-${{ steps.xcode.outputs.build }}
+
+      - name: Download Metal toolchain
+        if: steps.metal-cache.outputs.cache-hit != 'true'
+        run: xcodebuild -downloadComponent MetalToolchain -exportPath "$HOME/.cache/metal-toolchain"
+
+      - name: Install Metal toolchain
+        run: |
+          xcrun --kill-cache
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            for bundle in "$HOME/.cache/metal-toolchain/"*.exportedBundle; do
+              xcodebuild -importComponent MetalToolchain -importPath "$bundle"
+            done
+            xcrun --kill-cache
+          fi
+          xcrun metal --version
+
+      - name: Cache MLX dependencies and build outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-mlx-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-mlx-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+            ${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-mlx-spm-
+
+      - name: Remove cached build descriptions
+        # Descriptions contain Metal compiler paths from the previous runner's
+        # temporary mount. Keep build.db and compiled outputs for incremental builds.
+        run: rm -rf .build/out/Intermediates.noindex/XCBuildData/*.xcbuilddata
+
+      - name: Build with MLX
+        run: mise run _swift:mlx -- build --build-tests --traits MLX
+
+      # Without ENABLE_MLX_TESTS and ENABLE_INWORLD_TESTS, the tests use no GPU
+      # and download no model. They check the window placement,
+      # and the installation of the checkpoint against a stub server.
+      - name: Test with MLX
+        run: mise run _swift:mlx -- test --skip-build --traits MLX
+
+      - name: Build for iOS with MLX
+        run: mise run build:mlx:ios
+
+  build-ios:
+    permissions:
+      contents: read
+    name: Build for iOS with Xcode 27.0
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: "/Applications/Xcode_27.0.app/Contents/Developer"
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build for iOS
+        run: xcodebuild build -scheme AnySoundIsolator -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO
