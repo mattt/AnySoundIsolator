@@ -32,15 +32,23 @@
     /// Use this model for recordings.
     ///
     /// The model is slower than ``SystemSoundIsolationModel`` and uses much more memory.
-    /// On an Apple M4 Max, it isolated about 10 seconds of audio in each second,
-    /// and the process had a peak memory footprint of 4.3 GB, whatever the length of the audio.
+    /// On an Apple M4 Max on 2026-11-20, it isolated about 10 seconds of audio in each second,
+    /// and the process had a peak memory footprint of 4.2 to 4.6 GB, whatever the length of the audio.
     /// Streams that are open at the same time share the loaded weights and render their windows in turn.
     /// While a stream is open, the model limits MLX's cache of free GPU buffers to 512 MB.
     /// The limit is one setting for the process, so it also applies to other MLX code in the app
     /// during that time; the model puts the earlier limit back when its last stream ends.
     ///
-    /// The first window that a process renders takes longer than the others,
-    /// because Metal prepares the network's GPU kernels.
+    /// The first render in a process takes longer than the others,
+    /// because Metal compiles the network's GPU kernels or reads them from its cache for the app.
+    /// With an empty cache, the first render took about 2.4 seconds longer.
+    /// To keep that time away from the user's first recording,
+    /// isolate a tenth of a second of silence with ``SoundIsolator/isolate(_:options:isolation:)``
+    /// after the app starts.
+    ///
+    /// The trait supports macOS on Apple silicon.
+    /// The model compiles for iOS, but it is not run there,
+    /// and one window needs more memory than iOS gives to most apps.
     public struct InworldSoundIsolationModel: SoundIsolationModel {
         /// The source of the checkpoint file.
         public enum Assets: Sendable, Hashable {

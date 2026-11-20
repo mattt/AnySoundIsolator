@@ -14,6 +14,10 @@ run = "mise run _swift -- build"
 description = "Build the library and the hush command with the MLX trait, which adds the Inworld model"
 run = "mise run _swift:mlx -- build --traits MLX"
 
+[tasks."build:mlx:ios"]
+description = "Compile the library for iOS with the MLX trait"
+run = "mise run _swift:mlx -- build --traits MLX --target AnySoundIsolator --triple arm64-apple-ios26.0 --sdk \"$(xcrun --sdk iphoneos --show-sdk-path)\" --build-path .build/ios-mlx"
+
 [tasks."build:ios"]
 description = "Compile the library for iOS without code signing"
 run = "xcodebuild build -scheme AnySoundIsolator -destination 'generic/platform=iOS' -derivedDataPath .build/ios CODE_SIGNING_ALLOWED=NO -quiet"

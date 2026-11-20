@@ -63,6 +63,35 @@ enum ReadmeExamples {
     }
 }
 
+#if MLX
+    /// The README's examples of the Inworld model, which exist with the `MLX` trait.
+    enum InworldReadmeExamples {
+        static func isolateRecording(recording: URL, voice: URL) async throws {
+            let isolator = SoundIsolator(model: InworldSoundIsolationModel())
+            if let request = try await isolator.assetInstallationRequest() {
+                print("Downloading \(request.progress.totalUnitCount) bytes")
+                try await request.downloadAndInstall()
+            }
+            try await isolator.isolate(contentsOf: recording, to: voice)
+        }
+
+        static func warmUp(isolator: SoundIsolator) async throws {
+            let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+            let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!
+            silence.frameLength = 4_800
+            _ = try await isolator.isolate(silence)
+        }
+
+        static func suppliedFile(checkpoint: URL) -> SoundIsolator {
+            SoundIsolator(model: InworldSoundIsolationModel(assets: .file(checkpoint)))
+        }
+
+        static func attribution() -> String {
+            InworldSoundIsolationModel().attribution
+        }
+    }
+#endif
+
 /// The README's example of a custom model.
 struct HalfVolumeModel: SoundIsolationModel {
     var availability: Availability<Never> { .available }

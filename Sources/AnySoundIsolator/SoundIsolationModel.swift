@@ -1,9 +1,9 @@
 /// A type that describes a sound isolation engine and makes an executor for each stream.
 ///
 /// A ``SoundIsolator`` works with any conforming type.
-/// The package has one model now, ``SystemSoundIsolationModel``.
-/// A model that downloads its weights and a model that calls a hosted service
-/// conform in the same way:
+/// The package has ``SystemSoundIsolationModel``,
+/// and with the `MLX` package trait it has `InworldSoundIsolationModel`, which downloads its weights.
+/// Your own model conforms in the same way, whether it runs on the device or calls a hosted service:
 ///
 /// - A model that needs files reports them in ``availability``
 ///   and returns a request from ``assetInstallationRequest()``.

@@ -21,9 +21,16 @@ and a mix of the two is a crossfade.
 You can play the isolated sound in place of the original
 and let a listener mix the background back in.
 
-The package has one engine now:
-Apple's sound isolation audio unit, which is part of the operating system.
-The engine interface also fits models that download their weights and hosted services.
+The package has two engines:
+
+- Apple's sound isolation audio unit, which is part of the operating system.
+  It needs no download, and it is fast enough for live audio.
+- [Inworld's Voice Isolator](https://github.com/inworld-ai/voice-isolator),
+  a neural network that runs on the GPU with [MLX](https://github.com/ml-explore/mlx-swift).
+  It is for recordings: it downloads a 256 MB file, and it is slower and uses much more memory.
+  The package includes it only when you enable the `MLX` [package trait](#inworld).
+
+The engine interface also fits other models that download their weights, and hosted services.
 
 ## Requirements
 
@@ -39,6 +46,13 @@ Add the package to your `Package.swift`:
 ```
 
 The library has no dependencies.
+To add the Inworld model, enable the `MLX` trait,
+which adds [MLX Swift](https://github.com/ml-explore/mlx-swift)
+and [swift-huggingface](https://github.com/huggingface/swift-huggingface):
+
+```swift
+.package(url: "https://github.com/mattt/AnySoundIsolator", from: "0.1.0", traits: ["MLX"])
+```
 
 ## Usage
 
@@ -173,6 +187,21 @@ if let request = try await isolator.assetInstallationRequest() {
 
 The system model needs no files, so its request is always `nil`.
 
+With the `MLX` trait, `InworldSoundIsolationModel` isolates the voice in a recording.
+Its request downloads one file of 256 MB and verifies it:
+
+```swift
+let isolator = SoundIsolator(model: InworldSoundIsolationModel())
+if let request = try await isolator.assetInstallationRequest() {
+    print("Downloading \(request.progress.totalUnitCount) bytes")
+    try await request.downloadAndInstall()
+}
+try await isolator.isolate(contentsOf: recording, to: voice)
+```
+
+Without the file, isolation throws `SoundIsolationError.missingAssets`.
+See [Inworld](#inworld) for what the model costs.
+
 ## Models
 
 ### System
@@ -201,6 +230,107 @@ The model processes audio in the format that it arrives in:
 
 A live stream receives each frame of output later than its input by the delay in the table,
 because the audio unit needs that much audio after a frame to isolate it.
+
+### Inworld
+
+`InworldSoundIsolationModel` runs `voice-isolator-v1`,
+the offline checkpoint of [Inworld's Voice Isolator](https://github.com/inworld-ai/voice-isolator),
+in a Swift port for MLX.
+The type exists only when the package is built with the `MLX` trait.
+By ear, on one long voice recording, Inworld's model was much better than the system model.
+
+**Output.** The port gives the output of Inworld's reference renders.
+For Inworld's two golden fixtures, the largest error through this package's file API
+was 4.2e-7 for 3 seconds of audio and 5.4e-7 for 11 seconds, on the GPU.
+Inworld's own tolerance is 1e-4.
+
+**Assets.** The model needs `denoiser.safetensors` (256,260,128 bytes), from
+[`inworld/voice-isolator`](https://huggingface.co/inworld/voice-isolator) on Hugging Face.
+`assetInstallationRequest()` downloads the file at a pinned revision,
+checks its size and its SHA-256 digest, and records that it is verified.
+The file goes into the Hugging Face cache, which other tools share:
+`~/.cache/huggingface/hub`, or the directory that `HF_HUB_CACHE` or `HF_HOME` names.
+A file that is already in the cache is verified and not downloaded again.
+A sandboxed app keeps the file in its container,
+in `Application Support/AnySoundIsolator/HuggingFace/hub`, which the package excludes from backups.
+Besides the App Sandbox entitlement, the app needs only the one for outgoing network connections,
+and it needs that one only for the download.
+To supply the file yourself, create the model with `assets: .file(url)`;
+the package then uses your file without a download and without a digest check.
+
+**Format.** The network takes one channel at 48 kHz.
+The isolator resamples other rates,
+and the [channel policy](#stereo-input-and-a-mono-engine) applies to stereo input:
+by default, a stereo recording costs the same as a mono one.
+
+**Windows.** The network works in windows of 8 seconds that overlap by 2 seconds.
+Inworld's offline render places the windows with the length of the clip known:
+every window is a full one, and the last window ends at the end of the clip.
+This package gives a stream the same frames, although a stream does not know its length.
+It runs a window when the stream has its 8 seconds, returns the first 6,
+and holds the 2-second crossfade until the next window or the end of the stream,
+where it places the last window as Inworld does.
+In our tests, a stream in pieces of several sizes, one buffer, and a file
+gave the same samples for the same audio, with a difference of exactly 0.
+What differs is when the frames arrive:
+the first frames come after 8 seconds of input, then 6 seconds of output for each 6 seconds of input,
+and the rest after the input ends.
+This delay is too long for a conversation, so use the system model for live audio.
+
+**Cost.** We measured release builds on an M4 Max with 36 GB of memory and macOS 27.0.1,
+on 2026-11-20, with MLX Swift 0.33.0, after the first render of the process.
+
+| Audio (48 kHz mono) | Time, file to file | Peak memory footprint |
+| --- | --- | --- |
+| 11 s | 1.17 to 1.21 s | 4.2 GB |
+| 1 min | 5.79 to 5.84 s | 4.3 to 4.6 GB |
+| 10 min | 58.6 to 59.6 s | 4.4 GB |
+
+- The model isolates about 10 seconds of audio in each second.
+  The first frames of a file arrive after about 0.6 s.
+- Memory does not grow with the length of the audio, because the isolator works one window at a time.
+  For one window, MLX had about 3.6 GB of GPU memory in use at its peak,
+  in a measurement of the port before it came into this package.
+  The weights are 256 MB, and they stay loaded while a stream is open.
+- MLX keeps the GPU buffers that it frees, without a limit by default.
+  While a stream is open, the package limits that cache to 512 MB, and it restores the earlier limit afterward.
+  The limit is one setting for the process, so it applies to other MLX code in the app during that time.
+  Without the limit, the footprint for one minute of audio was 5.5 GB, and the render was 3 percent faster.
+- Streams that are open at the same time share the weights and render their windows in turn.
+
+**The first render.** Metal compiles the network's GPU kernels the first time that an app uses them,
+and keeps them in a cache for the app.
+With an empty cache, the first render took about 2.4 s longer than later ones.
+Later launches of the app read the cache and start at the steady speed.
+The cache does not help a process that starts while another process of the same app is alive:
+the first process holds the cache file, and the second compiles the kernels again.
+A sandboxed app behaves the same as an app outside the sandbox in each of these cases.
+To keep the compilation away from the user's first recording,
+isolate a short silent buffer after the app starts:
+
+```swift
+let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!
+silence.frameLength = 4_800
+_ = try await isolator.isolate(silence)
+```
+
+That call took 2.6 s with an empty cache and 0.05 s on later launches.
+
+**Platforms.** The trait supports macOS on Apple silicon.
+The library also compiles for iOS with the trait, but nobody has run it there,
+and the memory for one window is more than iOS gives to most apps,
+so do not rely on the model on iOS.
+
+**Toolchain.** From the command line, the trait needs a SwiftPM that compiles MLX's Metal shaders;
+we built it with Swift 6.4.2, and MLX Swift 0.31.6 and later need Swift 6.3.
+Xcode also builds MLX Swift 0.31.4, which gave the same parity (4.2e-7 and 6.0e-7).
+`mise run build:mlx` finds the Metal toolchain, which
+`xcodebuild -downloadComponent MetalToolchain` installs.
+
+**License.** Inworld publishes the code and the weights under the Apache License, Version 2.0.
+`InworldSoundIsolationModel().attribution` has a line of attribution for an app to show.
+See [NOTICE](NOTICE) for the parts of this package that are adapted from Inworld's code.
 
 ## Custom models
 
@@ -267,16 +397,26 @@ $ swift run hush isolate recording.m4a voice.m4a --background rest.m4a --quality
 $ swift run hush status
 ```
 
+With the `MLX` trait, `hush` also has the Inworld model.
+`prepare` downloads and verifies its file, or only verifies a file that is already in the Hugging Face cache:
+
+```console
+$ swift run --traits MLX hush prepare --model inworld
+$ swift run --traits MLX hush recording.m4a voice.wav --model inworld
+$ swift run --traits MLX hush status --model inworld
+```
+
 `isolate` is the default subcommand.
 `--background` also writes the sound that was removed.
 `--channel-policy perChannel` isolates each channel separately
 when the model takes fewer channels than the file has.
-`status` reports whether the model can run, without downloading.
+`prepare` installs the files that a model needs; isolation never downloads.
+`status` reports whether the model can run and has its files, without downloading.
 Run `swift run hush --help` for all options.
 
 ## Performance
 
-We measured a release build of `hush` on an M4 Max with macOS 27.0,
+We measured a release build of `hush` with the system model on an M4 Max with macOS 27.0,
 on 10 minutes of 48 kHz audio made in code.
 Both qualities took about the same time.
 
@@ -285,10 +425,18 @@ Both qualities took about the same time.
 | Mono | 6.6 to 6.9 s | 41 to 45 MB |
 | Stereo | 14.2 to 15.1 s | 41 to 53 MB |
 
+The Inworld model took about 59 s for 10 minutes of mono audio, with a footprint of 4.4 GB;
+see [Inworld](#inworld).
+
 ## Limitations
 
-- Nobody has compared the engines by ear for this package.
-  The tests check length and timing with signals made in code; they do not check sound quality.
+- Nobody has listened to this package's output.
+  The tests check length and timing with signals made in code,
+  and they compare the Inworld model with Inworld's reference renders;
+  they do not check sound quality.
+- The Inworld model returns the first frames of a stream after 8 seconds of input.
+  The package does not have Inworld's realtime checkpoint.
+- The Inworld model is not run on iOS, on an Intel Mac, or with less than 36 GB of memory.
 - At a sample rate that does not divide 48,000, such as 44.1 kHz,
   the audio unit's delay is not a whole number of frames,
   so the output can be off the input's timeline by less than one frame.
@@ -303,22 +451,32 @@ Both qualities took about the same time.
 
 The repository uses [mise](https://mise.jdx.dev/) tasks.
 Swift comes from the selected Xcode.
-No task downloads a model.
+No task downloads a model unless its description says so.
+The MLX tasks need Apple silicon and the Metal toolchain.
 
 | Task | Description |
 | --- | --- |
 | `mise run setup` | Resolve package dependencies. |
 | `mise run build` | Build the library and the `hush` command. |
 | `mise run build:ios` | Compile the library for iOS. |
+| `mise run build:mlx` | Build the library and `hush` with the `MLX` trait. |
+| `mise run build:mlx:ios` | Compile the library for iOS with the `MLX` trait. |
 | `mise run test` | Run the tests, which make their own audio. |
+| `mise run test:mlx` | Run the tests with the `MLX` trait and its GPU tests, without a download. |
+| `mise run test:parity` | Compare the Inworld model with Inworld's golden fixtures. Downloads the checkpoint (256 MB) unless it is in the Hugging Face cache. |
+| `mise run fetch:fixtures` | Download Inworld's golden fixtures (3 MB, CC BY 4.0) into `Fixtures/`, which Git ignores. |
+| `mise run prepare:inworld` | Download and verify the Inworld checkpoint (256 MB). |
 | `mise run lint` | Check the formatting of the Swift sources. |
 | `mise run format` | Format the Swift sources in place. |
 
 The examples in this file are also in
 [`ReadmeExamples.swift`](Tests/AnySoundIsolatorTests/ReadmeExamples.swift),
 so the tests fail to build when an example no longer compiles.
+The examples of the Inworld model compile in the tests with the `MLX` trait.
 
 ## License
 
 AnySoundIsolator is available under the Apache License, Version 2.0.
 See [LICENSE](LICENSE) for details.
+The Inworld model is adapted from Inworld's Voice Isolator, which has the same license;
+see [NOTICE](NOTICE).

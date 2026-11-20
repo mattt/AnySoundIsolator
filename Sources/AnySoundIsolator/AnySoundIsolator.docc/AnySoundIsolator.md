@@ -41,6 +41,33 @@ A model that needs files installs them through an ``AssetInstallationRequest``,
 which ``SoundIsolator/assetInstallationRequest()`` returns.
 Isolation never downloads.
 
+### The Inworld model
+
+When you enable the package's `MLX` trait, the package also has `InworldSoundIsolationModel`,
+which runs Inworld's Voice Isolator on the GPU with MLX.
+Use it for recordings, where its quality is worth its cost:
+
+```swift
+let isolator = SoundIsolator(model: InworldSoundIsolationModel())
+if let request = try await isolator.assetInstallationRequest() {
+    try await request.downloadAndInstall()
+}
+try await isolator.isolate(contentsOf: recording, to: voice)
+```
+
+The request downloads one file of 256 MB into the Hugging Face cache and verifies it.
+In a sandboxed app, the file goes into the app's container.
+On an Apple M4 Max on 2026-11-20, the model isolated about 10 seconds of audio in each second,
+with a peak memory footprint of 4.2 to 4.6 GB.
+The network works in windows of 8 seconds,
+so a stream receives its first frames after 8 seconds of input.
+A stream and a file with the same audio give the same frames.
+
+The trait supports macOS on Apple silicon.
+The model compiles for iOS, but it is not run there,
+and one window needs more memory than iOS gives to most apps.
+This documentation shows the model's symbols only when it is built with the trait.
+
 ## Topics
 
 ### Isolation
@@ -58,6 +85,8 @@ Isolation never downloads.
 ### Models
 
 - ``SystemSoundIsolationModel``
+
+<!-- With the MLX trait, the package also has InworldSoundIsolationModel. -->
 
 ### Custom models
 
