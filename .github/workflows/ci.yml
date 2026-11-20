@@ -58,6 +58,11 @@ jobs:
       - name: Test
         run: swift test --skip-build
 
+      # Prints checksums of renders by the system's audio unit, with no other test in the process.
+      - name: Report on the system's audio unit
+        if: ${{ !cancelled() }}
+        run: swift test --skip-build --filter SystemUnitDiagnostics
+
   test-mlx:
     permissions:
       contents: read
