@@ -1,3 +1,11 @@
+// This file is adapted from Inworld Voice Isolator (https://github.com/inworld-ai/voice-isolator),
+// Copyright 2026 Inworld AI, licensed under the Apache License, Version 2.0.
+// It adapts the network in `src/inworld/voice_isolation/model.py`.
+// This file was changed from the original:
+// the code is rewritten from Python for PyTorch to Swift for MLX,
+// and only the offline, two-sided form of the network is ported.
+// See the NOTICE file.
+
 #if MLX
     import Foundation
     import MLX

@@ -1,3 +1,11 @@
+// This file is adapted from Inworld Voice Isolator (https://github.com/inworld-ai/voice-isolator),
+// Copyright 2026 Inworld AI, licensed under the Apache License, Version 2.0.
+// It adapts the entry `voice-isolator-v1` in `src/inworld/voice_isolation/registry.py`.
+// This file was changed from the original:
+// only the repository, revision, file name, size, and SHA-256 digest are copied;
+// the code that downloads and verifies the file is new.
+// See the NOTICE file.
+
 #if MLX
     import CryptoKit
     import Foundation

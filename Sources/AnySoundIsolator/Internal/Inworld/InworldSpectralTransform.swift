@@ -1,3 +1,11 @@
+// This file is adapted from Inworld Voice Isolator (https://github.com/inworld-ai/voice-isolator),
+// Copyright 2026 Inworld AI, licensed under the Apache License, Version 2.0.
+// It adapts the transforms that `src/inworld/voice_isolation/model.py` uses.
+// This file was changed from the original:
+// the code is rewritten from Python for PyTorch to Swift for MLX,
+// with the short-time Fourier transform and its inverse written out.
+// See the NOTICE file.
+
 #if MLX
     import Foundation
     import MLX

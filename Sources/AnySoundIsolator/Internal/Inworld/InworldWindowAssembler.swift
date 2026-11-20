@@ -1,3 +1,11 @@
+// This file is adapted from Inworld Voice Isolator (https://github.com/inworld-ai/voice-isolator),
+// Copyright 2026 Inworld AI, licensed under the Apache License, Version 2.0.
+// It adapts the window placement of `VoiceIsolatorNetwork.enhance` in `src/inworld/voice_isolation/model.py`.
+// This file was changed from the original:
+// the code is rewritten from Python to Swift,
+// and it works on a stream whose length is not known in advance.
+// See the NOTICE file.
+
 #if MLX
     /// Places the windows of a stream and joins their output,
     /// with the result that `VoiceIsolatorNetwork.enhance` in Inworld's `model.py` gives for the whole clip.

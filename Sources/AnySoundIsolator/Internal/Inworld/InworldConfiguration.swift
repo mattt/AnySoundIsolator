@@ -1,3 +1,11 @@
+// This file is adapted from Inworld Voice Isolator (https://github.com/inworld-ai/voice-isolator),
+// Copyright 2026 Inworld AI, licensed under the Apache License, Version 2.0.
+// It adapts the configuration in `src/inworld/voice_isolation/model.py`.
+// This file was changed from the original:
+// the code is rewritten from Python to Swift,
+// and it refuses the forms of the network that this package does not port.
+// See the NOTICE file.
+
 #if MLX
     import Foundation
 

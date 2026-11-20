@@ -1,3 +1,11 @@
+// This file is adapted from Inworld Voice Isolator (https://github.com/inworld-ai/voice-isolator),
+// Copyright 2026 Inworld AI, licensed under the Apache License, Version 2.0.
+// It adapts the Metal kernel `_METAL_SOURCE` in `src/inworld/voice_isolation/scan.py`.
+// This file was changed from the original:
+// the kernel reads its sizes from the shapes of its inputs, always applies the gate,
+// and carries no state between calls; the code around it is new, in Swift for MLX.
+// See the NOTICE file.
+
 #if MLX
     import MLX
 

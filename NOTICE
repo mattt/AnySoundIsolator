@@ -27,6 +27,7 @@ Changes from the original: the code is rewritten in Swift for MLX; the Metal
 kernel reads its sizes from the shapes of its inputs, always applies the gate,
 and carries no state between calls; the window placement works on a stream
 whose length is not known in advance; and only the offline model is ported.
+Each adapted file starts with a notice that states its source and its changes.
 
 The model weights are not part of this repository. The code downloads them
 from https://huggingface.co/inworld/voice-isolator when an application asks
