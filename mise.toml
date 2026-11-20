@@ -1,22 +1,29 @@
 # Swift comes from Xcode, not from mise.
 # No task downloads a model unless its description says so.
 # MLX tasks need Apple silicon and the Metal toolchain.
+#
+# The build and test tasks pass --only-use-versions-from-resolved-file.
+# SwiftPM saves pins only for the traits of the current build,
+# so without the flag a build without the MLX trait removes the MLX pins from Package.resolved.
+# With the flag, SwiftPM reads the file and does not write it.
+# A build without the trait then also fetches the MLX packages, but does not compile them.
+# To change a version, run `xcrun swift package --traits MLX update` and commit the file.
 
 [tasks.setup]
 description = "Resolve Swift package dependencies"
-run = "mise run _swift -- package resolve"
+run = "mise run _swift -- package resolve --only-use-versions-from-resolved-file"
 
 [tasks.build]
 description = "Build the library and the silence command"
-run = "mise run _swift -- build"
+run = "mise run _swift -- build --only-use-versions-from-resolved-file"
 
 [tasks."build:mlx"]
 description = "Build the library and the silence command with the MLX trait, which adds the Inworld model"
-run = "mise run _swift:mlx -- build --traits MLX"
+run = "mise run _swift:mlx -- build --only-use-versions-from-resolved-file --traits MLX"
 
 [tasks."build:mlx:ios"]
 description = "Compile the library for iOS with the MLX trait"
-run = "mise run _swift:mlx -- build --traits MLX --target AnySoundIsolator --triple arm64-apple-ios26.0 --sdk \"$(xcrun --sdk iphoneos --show-sdk-path)\" --build-path .build/ios-mlx"
+run = "mise run _swift:mlx -- build --only-use-versions-from-resolved-file --traits MLX --target AnySoundIsolator --triple arm64-apple-ios26.0 --sdk \"$(xcrun --sdk iphoneos --show-sdk-path)\" --build-path .build/ios-mlx"
 
 [tasks."build:ios"]
 description = "Compile the library for iOS without code signing"
@@ -24,18 +31,18 @@ run = "xcodebuild build -scheme AnySoundIsolator -destination 'generic/platform=
 
 [tasks.test]
 description = "Run the tests, which need no model download and no audio files"
-run = "mise run _swift -- test"
+run = "mise run _swift -- test --only-use-versions-from-resolved-file"
 
 [tasks."test:mlx"]
 description = "Run the tests with the MLX trait and its GPU tests, which need no model download"
 env = { ENABLE_MLX_TESTS = "1" }
-run = "mise run _swift:mlx -- test --traits MLX"
+run = "mise run _swift:mlx -- test --only-use-versions-from-resolved-file --traits MLX"
 
 [tasks."test:parity"]
 description = "Compare the Inworld model with Inworld's golden fixtures (downloads the checkpoint, 256 MB, unless it is in the Hugging Face cache)"
 depends = ["fetch:fixtures"]
 env = { ENABLE_INWORLD_TESTS = "1" }
-run = "mise run _swift:mlx -- test --traits MLX --filter InworldParityTests"
+run = "mise run _swift:mlx -- test --only-use-versions-from-resolved-file --traits MLX --filter InworldParityTests"
 
 [tasks."fetch:fixtures"]
 description = "Download Inworld's golden parity fixtures (3 MB, CC BY 4.0) into Fixtures/, which Git ignores"
@@ -43,7 +50,7 @@ run = "scripts/fetch-fixtures.sh"
 
 [tasks."prepare:inworld"]
 description = "Download and verify the Inworld checkpoint (256 MB) in the Hugging Face cache"
-run = "mise run _swift:mlx -- run --traits MLX silence prepare --model inworld"
+run = "mise run _swift:mlx -- run --only-use-versions-from-resolved-file --traits MLX silence prepare --model inworld"
 
 [tasks.lint]
 description = "Check the formatting of the Swift sources"
