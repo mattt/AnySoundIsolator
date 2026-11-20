@@ -26,6 +26,29 @@ struct SystemSoundIsolationModelTests {
         #expect(TestAudio.level(isolated) > 0.1 * TestAudio.level(input))
     }
 
+    /// The unit changes a signal of a voice with noise, so an engine that returns its input does not pass.
+    ///
+    /// The other tests check the level, the delay, and that the two outputs add up to the input,
+    /// and an unchanged input meets all three.
+    /// Here the sound that the unit removed must be at least half as loud as the noise.
+    /// On an Apple M4 Max it is 2 to 3 times as loud, because the unit also changes the synthetic voice.
+    /// This is not a check of how the output sounds.
+    @Test(arguments: Quality.allCases)
+    func voiceWithNoiseIsChanged(quality: Quality) async throws {
+        let voice = TestAudio.voice(seconds: 4)
+        let noise = TestAudio.noise(count: voice.count, amplitude: 0.05)
+        let input = zip(voice, noise).map { $0 + $1 }
+        let isolator = SoundIsolator(model: SystemSoundIsolationModel(quality: quality))
+        let audio = try await isolator.isolate(try TestAudio.buffer([input]))
+        let isolated = TestAudio.channels(audio.buffer)[0]
+        let removed = TestAudio.channels(audio.background())[0]
+
+        #expect(isolated.allSatisfy { $0.isFinite })
+        #expect(isolated != input)
+        #expect(TestAudio.level(removed) > 0.5 * TestAudio.level(noise))
+        #expect(TestAudio.level(isolated) > 0.1 * TestAudio.level(input))
+    }
+
     @Test(arguments: Quality.allCases)
     func stereoOutputIsOnTheInputTimeline(quality: Quality) async throws {
         let input = [TestAudio.voice(seconds: 3, seed: 1), TestAudio.voice(seconds: 3, seed: 2)]

@@ -37,6 +37,9 @@
             let (rates, bs, cs, ds) = (
                 a.asArray(Float.self), b.asArray(Float.self), c.asArray(Float.self), d.asArray(Float.self)
             )
+            // A NaN does not raise the largest error below, so check for one first.
+            #expect(y.count == rows * frames * channels)
+            #expect(y.allSatisfy { $0.isFinite })
             var worst: Float = 0
             for row in 0 ..< rows {
                 for channel in 0 ..< channels {

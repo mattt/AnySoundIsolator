@@ -178,9 +178,21 @@ enum TestAudio {
     }
 
     /// The largest difference between two signals of the same length.
+    ///
+    /// The result is infinite when the lengths differ or when a sample is not finite,
+    /// so that a comparison with a tolerance fails for a signal of NaNs.
+    /// `max` alone would skip a NaN and leave the result at zero.
     static func maximumDifference(_ lhs: [Float], _ rhs: [Float]) -> Float {
-        guard lhs.count == rhs.count else { return .infinity }
+        guard lhs.count == rhs.count, lhs.allSatisfy(\.isFinite), rhs.allSatisfy(\.isFinite) else {
+            return .infinity
+        }
         return zip(lhs, rhs).reduce(0) { max($0, abs($1.0 - $1.1)) }
+    }
+
+    /// Noise with a flat spectrum, for an engine that removes everything that is not a voice.
+    static func noise(count: Int, amplitude: Float, seed: UInt64 = 1) -> [Float] {
+        var generator = Generator(state: seed)
+        return (0 ..< count).map { _ in Float.random(in: -amplitude ... amplitude, using: &generator) }
     }
 
     /// The root mean square of a signal.

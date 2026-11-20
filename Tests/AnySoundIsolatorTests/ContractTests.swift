@@ -439,6 +439,24 @@ import Testing
         #expect(calls.withLock { $0 } == 2)
     }
 
+    /// The comparison that the tests use fails for a signal that is not finite.
+    @Test func differenceOfSignalsThatAreNotFiniteIsInfinite() {
+        let signal: [Float] = [0, 0.5, -0.5, 1]
+        #expect(TestAudio.maximumDifference(signal, signal) == 0)
+        #expect(TestAudio.maximumDifference(signal, [0, 0.5, -0.25, 1]) == 0.25)
+        #expect(TestAudio.maximumDifference(signal, [0, 0.5, -0.5]) == .infinity)
+        for value in [Float.nan, .infinity, -.infinity] {
+            var other = signal
+            other[2] = value
+            #expect(TestAudio.maximumDifference(signal, other) == .infinity)
+            #expect(TestAudio.maximumDifference(other, signal) == .infinity)
+            #expect(TestAudio.maximumDifference(other, other) == .infinity)
+            #expect(!(TestAudio.maximumDifference(other, other) < 1e-6))
+        }
+        let nans = [Float](repeating: .nan, count: 4)
+        #expect(!(TestAudio.maximumDifference(nans, signal) <= 1e-4))
+    }
+
     @Test func assetRequestRunsOnlyWhenAsked() async throws {
         let count = Counter()
         let request = AssetInstallationRequest(progress: Progress(totalUnitCount: 1)) {

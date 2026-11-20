@@ -43,11 +43,6 @@
             return data.dropFirst(10 + headerLength).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
         }
 
-        static func maximumDifference(_ lhs: [Float], _ rhs: [Float]) -> Float {
-            guard lhs.count == rhs.count else { return .infinity }
-            return zip(lhs, rhs).reduce(0) { max($0, abs($1.0 - $1.1)) }
-        }
-
         static func level(_ samples: [Float]) -> Float {
             (samples.reduce(0) { $0 + $1 * $1 } / Float(max(samples.count, 1))).squareRoot()
         }
@@ -68,7 +63,7 @@
                 #expect(progress.completedUnitCount == Int64(expected.count))
                 let voice = try await TestAudio.read(output)
                 #expect(voice.count == 1)
-                let error = Self.maximumDifference(voice[0], expected)
+                let error = TestAudio.maximumDifference(voice[0], expected)
                 let below = 20 * log10(Self.level(expected) / error)
                 print("parity: \(fixture) file: maximum absolute error \(error), \(below) dB below the signal")
                 #expect(error <= Self.tolerance)
@@ -93,12 +88,12 @@
                     for size in [4_096, 48_000, 123_457] {
                         let buffers = try TestAudio.buffers([samples], size: size)
                         let stream = try await TestAudio.collect(isolator.streamIsolation(of: Buffers(buffers)))
-                        let difference = Self.maximumDifference(stream.isolated[0], file)
+                        let difference = TestAudio.maximumDifference(stream.isolated[0], file)
                         print("parity: \(name) stream in pieces of \(size) against the file: \(difference)")
                         #expect(difference <= 1e-6)
                     }
                     let whole = try await isolator.isolate(try TestAudio.buffer([samples]))
-                    let difference = Self.maximumDifference(TestAudio.channels(whole.buffer)[0], file)
+                    let difference = TestAudio.maximumDifference(TestAudio.channels(whole.buffer)[0], file)
                     print("parity: \(name) one buffer against the file: \(difference)")
                     #expect(difference <= 1e-6)
                 }
@@ -119,7 +114,7 @@
                 #expect(file.count == samples.count)
                 let buffers = try TestAudio.buffers([samples], size: 4_410, sampleRate: 44_100)
                 let stream = try await TestAudio.collect(isolator.streamIsolation(of: Buffers(buffers)))
-                let difference = Self.maximumDifference(stream.isolated[0], file)
+                let difference = TestAudio.maximumDifference(stream.isolated[0], file)
                 print("parity: 44.1 kHz stream in pieces of 4410 against the file: \(difference)")
                 #expect(difference <= 1e-4)
             }
