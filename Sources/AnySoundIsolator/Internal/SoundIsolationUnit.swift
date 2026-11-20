@@ -6,6 +6,10 @@ import AudioToolbox
 /// The unit renders a block of output when asked and pulls the same number of input frames
 /// through a callback, so the same code serves a whole file and a live stream.
 /// Its output does not depend on the size of the blocks.
+/// It does depend on the position of the stack at the render call,
+/// so every render call is made from a fixed position:
+/// two units in one process give the same output for the same samples.
+/// The output can differ between builds of the package and between versions of the system.
 /// The output trails the input by ``latency`` frames.
 final class SoundIsolationUnit {
     /// The largest number of frames in one render call.
@@ -192,12 +196,13 @@ final class SoundIsolationUnit {
                     feed.frameCount = 0
                 }
                 output.frameLength = AVAudioFrameCount(count)
-                var flags = AudioUnitRenderActionFlags()
-                var timestamp = AudioTimeStamp()
-                timestamp.mFlags = .sampleTimeValid
-                timestamp.mSampleTime = sampleTime
                 try Self.check(
-                    AudioUnitRender(unit, &flags, &timestamp, 0, UInt32(count), output.mutableAudioBufferList)
+                    Self.renderAtFixedStackAlignment(
+                        unit,
+                        sampleTime: sampleTime,
+                        frameCount: UInt32(count),
+                        into: output.mutableAudioBufferList
+                    )
                 )
             }
             // The unit can point the buffer list at its own memory, so read through the list.
@@ -214,6 +219,52 @@ final class SoundIsolationUnit {
             rendered += count
         }
         return result
+    }
+
+    /// Calls `AudioUnitRender` from a fixed position of the stack within 64 bytes.
+    ///
+    /// The unit's output depends on that position.
+    /// On macOS 27 with an Apple M4 Max, the same samples gave three different outputs,
+    /// one for each of three positions of the stack modulo 64 bytes at this call.
+    /// One second of a voice at a level of 0.11 differed in 9 of 10 frames, by as much as 0.012.
+    /// The position depends on the caller: on the functions between it and this call, on the thread,
+    /// and on whether the Swift runtime resumes a task inline or as a new job.
+    /// So two streams of the same samples could differ, and which of them differed was not repeatable.
+    ///
+    /// The method measures where a stack allocation is, and makes a second allocation
+    /// that is larger by that offset, so the second one starts at the same position each time.
+    /// The frames between it and `AudioUnitRender` have a fixed size in one build,
+    /// so every render in a process calls the unit from the same position.
+    /// The timestamp and the flags of the call are in that allocation.
+    ///
+    /// This relies on `withUnsafeTemporaryAllocation` using the stack, as it does for a size this small.
+    /// If it used the heap, the call would be as it was before: correct, and not repeatable.
+    @inline(never)
+    private static func renderAtFixedStackAlignment(
+        _ unit: AudioUnit,
+        sampleTime: Float64,
+        frameCount: UInt32,
+        into buffers: UnsafeMutablePointer<AudioBufferList>
+    ) -> OSStatus {
+        // Find where a stack allocation is now, within 64 bytes.
+        let offset = withUnsafeTemporaryAllocation(byteCount: 16, alignment: 16) { probe in
+            Int(UInt(bitPattern: probe.baseAddress) % 64)
+        }
+        // The stack grows down, so an allocation that is larger by that offset
+        // starts at the same position within 64 bytes each time.
+        // The arguments of the call are in the allocation, so the compiler cannot remove it.
+        let flagsOffset = MemoryLayout<AudioTimeStamp>.stride
+        let byteCount = flagsOffset + MemoryLayout<AudioUnitRenderActionFlags>.stride
+        return withUnsafeTemporaryAllocation(byteCount: (byteCount + 15) / 16 * 16 + offset, alignment: 16) { anchor in
+            guard let base = anchor.baseAddress else { return kAudio_MemFullError }
+            let timestamp = base.bindMemory(to: AudioTimeStamp.self, capacity: 1)
+            let flags = (base + flagsOffset).bindMemory(to: AudioUnitRenderActionFlags.self, capacity: 1)
+            timestamp.initialize(to: AudioTimeStamp())
+            timestamp.pointee.mFlags = .sampleTimeValid
+            timestamp.pointee.mSampleTime = sampleTime
+            flags.initialize(to: [])
+            return AudioUnitRender(unit, flags, timestamp, 0, frameCount, buffers)
+        }
     }
 
     /// Calls a closure with a pointer into each channel, starting at an offset.

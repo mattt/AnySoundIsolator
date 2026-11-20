@@ -151,6 +151,67 @@ struct SystemSoundIsolationModelTests {
         }
     }
 
+    /// Runs a closure with the stack lower by a number of bytes.
+    @inline(never)
+    private static func withStackLowered<Result>(by byteCount: Int, _ body: () throws -> Result) rethrows -> Result {
+        guard byteCount > 0 else { return try body() }
+        return try withUnsafeTemporaryAllocation(byteCount: byteCount, alignment: 16) { pad in
+            pad.initializeMemory(as: UInt8.self, repeating: 0)
+            return try body()
+        }
+    }
+
+    /// Renders one second of a voice with a new unit and returns everything that the unit gives.
+    private static func render(stackLoweredBy byteCount: Int, quality: Quality) throws -> AudioSamples {
+        let unit = try SoundIsolationUnit(
+            sampleRate: 48_000,
+            channelCount: 1,
+            soundType: quality.soundType,
+            wetDryMixPercent: 100
+        )
+        let input = AudioSamples(channels: [TestAudio.voice(seconds: 1)])
+        return try withStackLowered(by: byteCount) {
+            try unit.render(input, frameCount: input.frameCount + unit.latency)
+        }
+    }
+
+    /// The system unit's output depends on the position of the stack, within 64 bytes, at the render call.
+    /// The package makes that call from a fixed position, so the caller's stack, its thread,
+    /// and its queue do not change the output.
+    /// Without that, the positions below gave three different outputs on an Apple M4 Max.
+    @Test(arguments: Quality.allCases)
+    func outputDoesNotDependOnTheCallersStack(quality: Quality) async throws {
+        let expected = try Self.render(stackLoweredBy: 0, quality: quality).channels
+        for byteCount in stride(from: 16, through: 128, by: 16) {
+            let output = try Self.render(stackLoweredBy: byteCount, quality: quality).channels
+            #expect(output == expected, "stack lowered by \(byteCount): \(TestAudio.difference(output, expected))")
+        }
+
+        let onAThread = try await withCheckedThrowingContinuation { continuation in
+            Thread.detachNewThread {
+                continuation.resume(with: Result { try Self.render(stackLoweredBy: 0, quality: quality).channels })
+            }
+        }
+        #expect(onAThread == expected, "new thread: \(TestAudio.difference(onAThread, expected))")
+        let onAQueue = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(with: Result { try Self.render(stackLoweredBy: 0, quality: quality).channels })
+            }
+        }
+        #expect(onAQueue == expected, "dispatch queue: \(TestAudio.difference(onAQueue, expected))")
+        let inATask = try await Task.detached {
+            try Self.render(stackLoweredBy: 0, quality: quality).channels
+        }.value
+        #expect(inATask == expected, "detached task: \(TestAudio.difference(inATask, expected))")
+
+        // The isolator gives the same samples, with the unit's delay removed.
+        let isolator = SoundIsolator(model: SystemSoundIsolationModel(quality: quality))
+        let audio = try await isolator.isolate(try TestAudio.buffer([TestAudio.voice(seconds: 1)]))
+        let isolated = TestAudio.channels(audio.buffer)
+        let aligned = expected.map { Array($0.suffix(48_000)) }
+        #expect(isolated == aligned, "isolator: \(TestAudio.difference(isolated, aligned))")
+    }
+
     @Test func silenceStaysSilent() async throws {
         let audio = try await SoundIsolator().isolate(
             try TestAudio.buffer([Array(repeating: 0, count: 24_000)])
