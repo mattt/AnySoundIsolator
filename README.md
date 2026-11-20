@@ -371,7 +371,7 @@ If files are missing, `makeExecutor(for:)` throws `SoundIsolationError.missingAs
 ## Limitations
 
 - The package does not have Inworld's realtime checkpoint.
-- Inworld is untested on an Intel Mac or with less than 36 GB of memory.
+- Inworld does not run on an Intel Mac and is untested with less than 36 GB of memory.
   The library compiles for iOS with the `MLX` trait, but nobody has run it there.
   On a Mac, the process used more than 4 GB,
   likely more than iOS gives to most apps.
@@ -383,8 +383,8 @@ If files are missing, `makeExecutor(for:)` throws `SoundIsolationError.missingAs
   as at 44.1 kHz or at 16 kHz with standard quality.
 - At standard quality, the measured voice delay was one frame less than the audio unit reported.
 - Extract audio from video files before isolation.
-- The package hasn't been tested on a physical iPhone, on the OS 26 runtime,
-  or with the minimum Swift 6.2 toolchain.
+- The package hasn't been tested on a physical iPhone,
+  and the Inworld model hasn't been tested on macOS 26.
 
 ## Development
 
