@@ -32,7 +32,7 @@ so you can crossfade between the isolated sound and the original.
 Add the package to your `Package.swift`.
 
 ```swift
-.package(url: "https://github.com/mattt/AnySoundIsolator", from: "0.1.0")
+.package(url: "https://github.com/mattt/AnySoundIsolator", branch: "main")
 ```
 
 With the default traits, the library has no dependencies.
@@ -41,7 +41,7 @@ Enable the `MLX` trait to include the Inworld model,
 and [swift-huggingface](https://github.com/huggingface/swift-huggingface).
 
 ```swift
-.package(url: "https://github.com/mattt/AnySoundIsolator", from: "0.1.0", traits: ["MLX"])
+.package(url: "https://github.com/mattt/AnySoundIsolator", branch: "main", traits: ["MLX"])
 ```
 
 ## Usage
