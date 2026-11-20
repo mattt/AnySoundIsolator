@@ -20,6 +20,20 @@
             #expect(abs(restored - signal).max().item(Float.self) < 1e-5)
         }
 
+        /// With a hop larger than half the window, the windows end before the length that the caller asks for.
+        /// The inverse keeps the samples that they cover and pads the rest with zeros, as `torch.istft` does.
+        /// Here the windows cover 11 of 13 samples.
+        @Test func inverseWithALongHopPadsTheSamplesThatNoWindowCovers() {
+            let transform = InworldSpectralTransform(nFFT: 8, hop: 7)
+            let signal = MLXRandom.normal([1, 13]) * 0.1
+            let restored = transform.inverse(transform.forward(signal), length: 13)
+            #expect(restored.shape == [1, 13])
+            let values = restored.asArray(Float.self)
+            let expected = signal.asArray(Float.self)
+            #expect(zip(values.prefix(11), expected.prefix(11)).allSatisfy { abs($0 - $1) < 1e-5 })
+            #expect(values.suffix(2) == [0, 0])
+        }
+
         /// The Metal kernel gives the result of the same recurrence written in Swift.
         @Test func scanKernelMatchesTheRecurrence() {
             let (rows, frames, channels, states) = (3, 50, 8, 16)
