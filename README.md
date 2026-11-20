@@ -10,22 +10,29 @@ let isolator = SoundIsolator()
 try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
-The default engine uses Apple's built-in sound isolation audio unit.
-It handles live audio without a download.
-For recordings, the `MLX` [package trait](#inworld) adds
+By default, `SoundIsolator` uses Apple's built-in sound isolation audio unit.
+It can isolate live audio without a download.
+For recordings, the [`MLX` package trait](#inworld) adds
 [Inworld's Voice Isolator](https://github.com/inworld-ai/voice-isolator),
 a neural network that runs on the GPU with [MLX](https://github.com/ml-explore/mlx-swift).
-It needs a 256 MB download, runs slower, and uses much more memory.
+It needs a 256 MB download, runs slower, and uses more memory.
 
 Every model preserves the input's sample rate, channel count, and frame count.
 Frame `n` of the output corresponds to frame `n` of the input.
-The isolator removes the engine's delay,
-so you can crossfade between the isolated sound and the original.
+The isolator removes the engine's delay so you can crossfade
+between the isolated sound and the original.
+See [Limitations](#limitations) for timing precision.
 
 ## Requirements
 
 - Swift 6.2 or later
 - macOS 26 or later, or iOS 26 or later
+
+The Inworld model supports macOS on Apple silicon.
+Install the Metal toolchain with `xcodebuild -downloadComponent MetalToolchain`.
+Command-line builds need SwiftPM support for MLX's Metal shaders.
+MLX Swift 0.31.6 and later need Swift 6.3.
+Xcode can also build MLX Swift 0.31.4.
 
 ## Installation
 
@@ -36,7 +43,7 @@ Add the package to your `Package.swift`.
 ```
 
 With the default traits, the library has no dependencies.
-Enable the `MLX` trait to include the Inworld model,
+Enable the `MLX` trait to add the Inworld model,
 [MLX Swift](https://github.com/ml-explore/mlx-swift),
 and [swift-huggingface](https://github.com/huggingface/swift-huggingface).
 
@@ -48,8 +55,8 @@ and [swift-huggingface](https://github.com/huggingface/swift-huggingface).
 
 ### Isolate a recording
 
-Optionally, pass a `Progress` object to track progress
-and a second destination to save the background.
+Input can be any file `AVAudioFile` reads.
+Pass `background` to save the removed sound and `progress` to track progress.
 
 ```swift
 let isolator = SoundIsolator()
@@ -62,24 +69,20 @@ try await isolator.isolate(
 )
 ```
 
-Input can be any file `AVAudioFile` reads.
-Choose a destination ending in `wav` or `caf` to preserve Float32 samples exactly,
-or `m4a` for smaller, lossy AAC files.
-
-The isolator reads and writes in blocks.
-Both built-in models return audio incrementally, keeping memory use bounded.
-An engine that defers all output needs memory for the whole recording.
+Use `.wav` or `.caf` to preserve Float32 samples exactly,
+or `.m4a` for a smaller, lossy AAC file.
+Both built-in models process recordings in blocks to keep memory use bounded.
 
 The isolator checks both destinations before opening a file,
 then writes temporary files alongside them.
-After writing all audio, it moves each file into place, replacing any existing file.
-Cancel the task to stop.
-On error or cancellation, the isolator discards temporary files and preserves existing destinations.
-The background moves first and keeps its new contents if the second move fails.
+If isolation fails or you cancel the task,
+the isolator discards temporary files and preserves existing destinations.
+After writing all the audio, it replaces the background file first.
+If the second move fails, the new background stays in place.
 
 ### Stream results from a file
 
-Play or display results in order with `streamIsolation(contentsOf:)`.
+To play or display results in order, call `streamIsolation(contentsOf:)`.
 
 ```swift
 for try await audio in isolator.streamIsolation(contentsOf: recording) {
@@ -92,7 +95,7 @@ the corresponding `source` frames, and their `framePosition` on the input timeli
 
 ### Isolate live audio
 
-Supply captured audio as an `AsyncSequence` of `AudioInput` values.
+Supply an `AsyncSequence` of `AudioInput` values in a single PCM format.
 Unlike `AVAudioPCMBuffer`, `AudioInput` is `Sendable`.
 It copies the capture buffer so the audio system can reuse it.
 
@@ -108,18 +111,15 @@ for try await audio in isolator.streamIsolation(of: buffers) {
 }
 ```
 
-The isolator reads on demand and has no input queue.
-If capture outpaces isolation, the example's `AsyncStream` buffers without limit.
-To limit it, give `makeStream` a buffering policy, such as `.bufferingNewest(8)`;
-the stream then drops audio.
-The output continues without the dropped audio, and its frame positions stay consecutive.
+The isolator reads on demand without an input queue.
+If capture outpaces isolation, this `AsyncStream` buffers without limit.
+Pass `.bufferingNewest(8)` to `makeStream` to drop audio when the buffer is full.
+Output frame positions stay consecutive.
 
-Supply your own capture in any PCM format and use that format throughout the stream.
-Output is deinterleaved Float32 at the input's sample rate and channel count.
+Output is deinterleaved Float32.
 Engine latency delays the first frames and leaves a tail after input ends.
 Buffer sizes can differ, but total frame counts match.
-
-For one buffer in memory, use `isolate(_:)`.
+For one buffer in memory, call `isolate(_:)`.
 
 ### The background and the mix
 
@@ -131,35 +131,34 @@ let background = audio.background()
 let mostlyVoice = audio.mixed(backgroundLevel: 0.25)
 ```
 
-The mix, `(1 - level) * buffer + level * source`, ranges from isolated sound at 0 to source at 1.
-A player can set the original and isolated track volumes to `level` and `1 - level`
-with an `AVAudioMix`.
+The mix, `(1 - level) * buffer + level * source`,
+ranges from isolated sound at 0 to source at 1.
+For playback with `AVAudioMix`, set the original track's volume to `level`
+and the isolated track's volume to `1 - level`.
 
 ### Stereo input and a mono engine
 
 When the input has more channels than the engine accepts,
 the isolator averages them, processes the downmix once,
-and copies the isolated sound to every output channel.
-Use `perChannel` for an interview with one speaker per channel.
+and copies the result to each channel.
+Only the background retains the differences between channels.
+For an interview with one speaker per channel, use `perChannel`.
 
 ```swift
 let options = IsolationOptions(channelPolicy: .perChannel)
 try await isolator.isolate(contentsOf: interview, to: voices, options: options)
 ```
 
-With `perChannel`, each channel adds work for the engine.
-Both policies preserve the channel count.
+Processing each channel separately costs more.
 In each channel, the isolated sound and background add up to the source.
-After a downmix, only the background retains the differences between channels.
-
 All isolation methods accept `options`.
-The policy has no effect when the engine accepts all channels,
+A model that accepts all input channels ignores the policy,
 as the system model does for stereo.
 
 ### Choose a model
 
-Pass a model to `SoundIsolator`.
-Request any assets before isolation, which never downloads files.
+Pass a model to `SoundIsolator` and request any assets before isolation.
+The system model needs no files, so its request is always `nil`.
 
 ```swift
 let isolator = SoundIsolator(model: SystemSoundIsolationModel(quality: .standard))
@@ -169,8 +168,8 @@ if let request = try await isolator.assetInstallationRequest() {
 }
 ```
 
-The default system model needs no files, so its request is always `nil`.
-With `MLX`, `InworldSoundIsolationModel` downloads and verifies one file on request.
+`InworldSoundIsolationModel` downloads and verifies one file on request.
+Without the file, isolation throws `SoundIsolationError.missingAssets`.
 
 ```swift
 let isolator = SoundIsolator(model: InworldSoundIsolationModel())
@@ -181,15 +180,12 @@ if let request = try await isolator.assetInstallationRequest() {
 try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
-Without the file, isolation throws `SoundIsolationError.missingAssets`.
-See [Inworld](#inworld) for performance and memory use.
-
 ### Command-line tool
 
-Use `silence` to isolate the voice in a local file.
-Its default subcommand, `isolate`, accepts `--background` to save the removed sound.
+`silence` isolates the voice in a local file with its default subcommand, `isolate`.
+Pass `--background` to save the removed sound.
 Use `--channel-policy perChannel` for separate channels
-when the model takes fewer channels than the file has.
+when the model accepts fewer channels than the file has.
 
 ```console
 $ swift run silence recording.m4a voice.wav
@@ -197,8 +193,8 @@ $ swift run silence isolate recording.m4a voice.m4a --background rest.m4a --qual
 $ swift run silence status
 ```
 
-With `MLX` enabled, `prepare` downloads and verifies the Inworld model
-or verifies a copy in the Hugging Face cache.
+With `MLX` enabled, `prepare` verifies the Inworld model in the Hugging Face cache,
+downloading it if needed.
 
 ```console
 $ swift run --traits MLX silence prepare --model inworld
@@ -206,8 +202,8 @@ $ swift run --traits MLX silence recording.m4a voice.wav --model inworld
 $ swift run --traits MLX silence status --model inworld
 ```
 
-Both isolation and `status` work without downloads.
 Use `status` to check availability and installed files.
+Neither isolation nor `status` downloads files.
 Run `swift run silence --help` for all options.
 
 ## Models
@@ -222,22 +218,17 @@ Run `swift run silence --help` for all options.
 | Delay that the package removes, mono at 48 kHz | 4,440 frames (92.5 ms) | 2,705 frames (56.4 ms) |
 | Delay that the package removes, stereo at 48 kHz | 6,360 frames (132.5 ms) | 3,665 frames (76.4 ms) |
 
-The audio unit runs at the input sample rate.
-Tests cover 8, 16, 44.1, 48, and 96 kHz.
-Mono and stereo input go directly to the unit, which processes stereo channels jointly.
+The audio unit accepts mono and stereo at the input sample rate.
+It processes stereo channels jointly.
 The left output depends on the right input,
 and identical stereo channels give a different result from mono.
 For three or more channels, the [channel policy](#stereo-input-and-a-mono-engine)
 selects a mono downmix by default or one audio unit per channel with `perChannel`.
 
-In a live stream, the audio unit delays each frame
-because it needs the following audio to isolate it.
-
-The audio unit does not always give the same samples for the same audio.
-On an M4 Max running macOS 27, a buffer, a stream, and a file gave identical samples.
-On virtual machines running macOS 27, two runs differed in most samples
-but kept the same length, timing, and level; the cause is unknown.
-Do not compare the system model's output sample for sample.
+In a live stream, each frame waits for the audio that follows it.
+Samples can differ across runs.
+On macOS 27 virtual machines, two runs differed in most samples
+but kept the same length, timing, and level.
 
 #### Performance
 
@@ -250,56 +241,50 @@ Both quality settings took about the same time.
 | Mono | 6.6 to 6.9 s | 41 to 45 MB |
 | Stereo | 14.2 to 15.1 s | 41 to 53 MB |
 
-[Inworld](#inworld) took about 59 s and 4.4 GB for 10 minutes of mono audio.
-
 ### Inworld
 
-With the `MLX` trait, `InworldSoundIsolationModel` runs `voice-isolator-v1`,
-the offline checkpoint of [Inworld's Voice Isolator](https://github.com/inworld-ai/voice-isolator),
-in a Swift port for MLX.
-See [Limitations](#limitations).
+`InworldSoundIsolationModel` is a Swift port of
+[Inworld's Voice Isolator](https://github.com/inworld-ai/voice-isolator)
+that runs the offline `voice-isolator-v1` checkpoint with MLX.
+The network takes 48 kHz mono audio.
+Other rates require resampling.
+The default [channel policy](#stereo-input-and-a-mono-engine) gives stereo the same cost as mono.
 
-**Output.** The port matches Inworld's reference renders within Inworld's 1e-4 tolerance.
-On the GPU, maximum file API errors for the two golden fixtures were
-4.2e-7 for 3 seconds and 5.4e-7 for 11 seconds.
+#### Install the model
 
-**Assets.** The model uses `denoiser.safetensors` (256,260,128 bytes)
-from [`inworld/voice-isolator`](https://huggingface.co/inworld/voice-isolator) on Hugging Face.
-`assetInstallationRequest()` downloads nothing.
-It returns a request, or `nil` when the model is ready.
-It throws on hardware that cannot run the model or when a file that you supply is missing.
+The model uses `denoiser.safetensors` (256,260,128 bytes)
+from [`inworld/voice-isolator`](https://huggingface.co/inworld/voice-isolator).
+`assetInstallationRequest()` returns a request, or `nil` if the model is ready.
+It throws if the hardware cannot run the model or a file you supply is missing.
 Call `downloadAndInstall()` to fetch the pinned revision,
 verify its size and SHA-256 digest, and record verification.
+It verifies an existing cached file without downloading it again.
 
-The file goes into the Hugging Face cache, which other tools share.
-The cache is the directory that `HF_HUB_CACHE` names, or else `hub` in the directory that `HF_HOME` names,
-or else `~/.cache/huggingface/hub`.
-A file that is already in the cache is verified and not downloaded again.
-Without those variables, a sandboxed app keeps the file in its container,
-in `Application Support/AnySoundIsolator/HuggingFace/hub`, which the package excludes from backups.
+Other tools can share the Hugging Face cache.
+Set `HF_HUB_CACHE` to choose the cache directory.
+Otherwise, the package uses `hub` under `HF_HOME` if set,
+or `~/.cache/huggingface/hub`.
+Without either variable, a sandboxed app uses
+`Application Support/AnySoundIsolator/HuggingFace/hub` in its container,
+which the package excludes from backups.
 Besides App Sandbox, only downloading requires an entitlement for outgoing network connections.
 Pass `assets: .file(url)` to use your own file without downloading or checking its digest.
 
-**Format.** The network takes mono audio at 48 kHz.
-Other rates need resampling.
-The default [channel policy](#stereo-input-and-a-mono-engine) gives stereo the same cost as mono.
+#### Streaming
 
-**Windows.** The network uses 8-second windows with a 2-second overlap.
-Inworld's offline render places the windows with the length of the clip known:
-every window is a full one, and the last window ends at the end of the clip.
-A clip shorter than 8 seconds is one short window.
-A stream returns the first 6 seconds and holds the 2-second crossfade
-until the next window or end of input.
-This matches Inworld's placement without knowing the length in advance.
-What differs is when the frames arrive:
-the first frames come after 8 seconds of input, then 6 seconds of output for each 6 seconds of input,
-and the rest after the input ends.
-A stream shorter than 8 seconds returns all of its frames after the input ends.
-In tests, a file, a single buffer, and streams of several buffer sizes
-produced a sample difference of exactly 0.
+As in Inworld's offline render, the stream uses 8-second windows with a 2-second overlap.
+The last window ends with the clip.
+Every window is full unless the entire clip is shorter than 8 seconds.
+
+After 8 seconds of input, the stream returns the first 6 seconds
+and holds 2 seconds for the crossfade.
+It then returns 6 seconds for each 6 seconds of input and the rest when input ends.
+Streams shorter than 8 seconds return all frames at the end.
 Use the system model for live conversation.
 
-**Cost.** These measurements used release builds with MLX Swift 0.33.0
+#### Performance and memory
+
+These measurements used release builds with MLX Swift 0.33.0
 on an M4 Max with 36 GB of memory running macOS 27.0.1,
 after the process's first render on 2026-11-20.
 
@@ -309,20 +294,17 @@ after the process's first render on 2026-11-20.
 | 1 min | 5.79 to 5.84 s | 4.3 to 4.6 GB |
 | 10 min | 58.6 to 59.6 s | 4.4 GB |
 
-The model processed about 10 seconds of audio per second.
 File output began after about 0.6 s.
-Processing one window at a time keeps memory use bounded.
-Before integration, MLX used about 3.6 GB of GPU memory at peak for one window.
-Open streams keep the 256 MB weights loaded and shared, rendering windows in turn.
+Open streams share the 256 MB weights and process one window at a time
+to keep memory use bounded.
 
-MLX caches freed GPU buffers without a limit by default.
-While a stream is open, the package lowers that limit to 512 MiB,
-and it restores the earlier limit afterward.
-It leaves a lower limit alone, and it keeps a limit that the app sets in the meantime.
-This process-wide limit also applies to other MLX code.
-Without it, a one-minute render used 5.5 GB and ran 3 percent faster.
+By default, MLX caches freed GPU buffers without a limit.
+While a stream is open, the package limits the process-wide cache to 512 MiB
+unless the limit is already lower.
+It restores the previous limit afterward unless the app has set another one.
+Without the limit, a one-minute render used 5.5 GB and ran 3 percent faster.
 
-**First render.** Metal compiles the GPU kernels on first use and caches them per app.
+Metal compiles GPU kernels on first use and caches them per app.
 An empty cache added about 2.4 s.
 Later launches start at full speed unless another process of the app
 holds the cache file open, forcing recompilation.
@@ -338,33 +320,18 @@ _ = try await isolator.isolate(silence)
 
 This took 2.6 s with an empty cache and 0.05 s on later launches.
 
-**Platforms.** The trait supports macOS on Apple silicon.
-The library also compiles for iOS with the trait, but nobody has run it there.
-On a Mac, the process used more than 4 GB, which is likely more than iOS gives to most apps,
-so do not rely on the model on iOS.
-
-**Toolchain.** Command-line builds need SwiftPM support for MLX's Metal shaders.
-Builds used Swift 6.4.2.
-MLX Swift 0.31.6 and later need Swift 6.3.
-Xcode also builds MLX Swift 0.31.4, which gave maximum errors of 4.2e-7 and 6.0e-7, also within the tolerance.
-Install the Metal toolchain with `xcodebuild -downloadComponent MetalToolchain`.
-`mise run build:mlx` locates it.
-
-**License.** Inworld publishes its code and weights under the Apache License, Version 2.0.
-Apps can display `InworldSoundIsolationModel().attribution`.
-See [NOTICE](NOTICE) for the parts adapted from Inworld's code.
-
 ### Custom models
 
-Implement `SoundIsolationModel` for configuration and `SoundIsolationExecutor` per stream.
+Implement `SoundIsolationModel` for configuration
+and `SoundIsolationExecutor` for each stream.
 The executor declares its sample rate, channel count, and latency.
 The isolator resamples in both directions, applies `IsolationOptions` for mono engines,
-removes latency from the start, and pads or trims the end to match the input length.
+removes latency, and pads or trims the end to match the input length.
 It handles file I/O, progress, background, and mixing.
 
-An executor can return zero or more frames per call,
-such as a completed window or a hosted service's entire result from `finish()`.
+An executor can return zero or more frames per call.
 Input stays in memory until the executor returns matching output.
+Waiting until `finish()` requires memory for the whole recording.
 
 This model halves the volume.
 
@@ -402,27 +369,25 @@ If files are missing, `makeExecutor(for:)` throws `SoundIsolationError.missingAs
 
 ## Limitations
 
-- In an earlier prototype, [Inworld](#inworld) sounded much better to me
-  than the system model on one long voice recording.
-  No one has listened to this package's output.
-  Tests check length and timing with synthetic signals
-  and compare Inworld output with its reference renders.
 - The package does not have Inworld's realtime checkpoint.
 - Inworld is untested on an Intel Mac or with less than 36 GB of memory.
-- The audio unit reports a delay of 92.5 ms for high quality and about 56.35 ms for standard quality in mono.
-  The package rounds it to a whole frame.
-  Where it is not a whole number of frames, such as at 44.1 kHz, or at 16 kHz with standard quality,
-  the output can be off the input's timeline by less than one frame.
-- With the standard quality, the measured delay of the isolated voice
-  was one frame less than the delay that the audio unit reports.
-- Extract the audio from video files before isolation.
+  The library compiles for iOS with the `MLX` trait, but nobody has run it there.
+  On a Mac, the process used more than 4 GB,
+  likely more than iOS gives to most apps.
+  Do not rely on this model on iOS.
+- In mono, the audio unit reports 92.5 ms of delay at high quality
+  and about 56.35 ms at standard quality.
+  The package rounds to a whole frame.
+  Fractional delays can put the output less than one frame off the input timeline,
+  as at 44.1 kHz or at 16 kHz with standard quality.
+- At standard quality, the measured voice delay was one frame less than the audio unit reported.
+- Extract audio from video files before isolation.
 - The package hasn't been tested on a physical iPhone, on the OS 26 runtime,
   or with the minimum Swift 6.2 toolchain.
 
 ## Development
 
 The [mise](https://mise.jdx.dev/) tasks use Swift from the selected Xcode.
-Model downloads are listed in the task descriptions.
 MLX tasks require Apple silicon and the Metal toolchain.
 
 | Task | Description |
@@ -440,21 +405,9 @@ MLX tasks require Apple silicon and the Metal toolchain.
 | `mise run lint` | Check the formatting of the Swift sources. |
 | `mise run format` | Format the Swift sources in place. |
 
-`Package.resolved` pins dependencies with the `MLX` trait enabled.
-SwiftPM saves pins for the current build's traits,
-so `swift build` or `swift run` without the trait rewrites the file in a checkout.
-The tasks that build, test, or run with SwiftPM pass `--only-use-versions-from-resolved-file`,
-which makes SwiftPM read the file and not write it.
-`build:ios` uses `xcodebuild` and does not pass the flag.
-To update a version, run `xcrun swift package --traits MLX update` and commit the file.
-
-The tests compile the examples in
-[`ReadmeExamples.swift`](Tests/AnySoundIsolatorTests/ReadmeExamples.swift),
-including the Inworld examples when the `MLX` trait is enabled.
-
 ## License
 
-AnySoundIsolator is available under the Apache License, Version 2.0.
-See [LICENSE](LICENSE) for details.
-The Inworld model is adapted from Inworld's Voice Isolator under the same license.
-See [NOTICE](NOTICE).
+AnySoundIsolator is available under the [Apache License, Version 2.0](LICENSE).
+Inworld publishes its code and weights under the same license.
+See [NOTICE](NOTICE) for attribution.
+Apps can display `InworldSoundIsolationModel().attribution`.
