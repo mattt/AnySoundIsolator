@@ -494,6 +494,13 @@ The MLX tasks need Apple silicon and the Metal toolchain.
 | `mise run lint` | Check the formatting of the Swift sources. |
 | `mise run format` | Format the Swift sources in place. |
 
+`Package.resolved` holds the pins for a build with the `MLX` trait.
+SwiftPM saves pins only for the traits of the current build,
+so `swift build` or `swift run` without the trait rewrites the file in a checkout.
+The build, test, and run tasks pass `--only-use-versions-from-resolved-file`,
+which makes SwiftPM read the file and not write it.
+To change a version, run `xcrun swift package --traits MLX update` and commit the file.
+
 The examples in this file are also in
 [`ReadmeExamples.swift`](Tests/AnySoundIsolatorTests/ReadmeExamples.swift),
 so the tests fail to build when an example no longer compiles.
