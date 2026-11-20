@@ -68,12 +68,11 @@ final class SoundIsolationUnit {
             var stream = format.streamDescription.pointee
             let streamSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
             for scope in [kAudioUnitScope_Input, kAudioUnitScope_Output] {
-                guard
-                    AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, scope, 0, &stream, streamSize)
-                        == noErr
-                else {
+                let status = AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, scope, 0, &stream, streamSize)
+                guard status == noErr else {
                     throw SoundIsolationError.unsupportedConfiguration(
-                        "The sound isolation audio unit does not accept \(channelCount) channels at \(sampleRate) Hz."
+                        "The sound isolation audio unit does not accept \(channelCount) channels "
+                            + "at \(sampleRate) Hz (stream format, status \(status))."
                     )
                 }
             }
@@ -122,9 +121,13 @@ final class SoundIsolationUnit {
                     0
                 )
             )
-            guard AudioUnitInitialize(unit) == noErr else {
+            // The messages name the step and the status,
+            // so that a refused format and a unit that failed to start are different in a report.
+            let status = AudioUnitInitialize(unit)
+            guard status == noErr else {
                 throw SoundIsolationError.unsupportedConfiguration(
-                    "The sound isolation audio unit does not accept \(channelCount) channels at \(sampleRate) Hz."
+                    "The sound isolation audio unit does not accept \(channelCount) channels "
+                        + "at \(sampleRate) Hz (initialization, status \(status))."
                 )
             }
             // The unit knows its latency after it is initialized with a format.

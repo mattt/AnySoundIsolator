@@ -49,7 +49,8 @@ struct SystemSoundIsolationModelTests {
         let isolator = SoundIsolator(model: UnprocessedModel(quality: quality))
         let audio = try await isolator.isolate(try TestAudio.buffer(input))
 
-        #expect(TestAudio.channels(audio.buffer) == input)
+        let output = TestAudio.channels(audio.buffer)
+        #expect(output == input, TestAudio.difference(output, input))
     }
 
     @Test func threeChannelsAreDownmixedByDefault() async throws {
@@ -61,8 +62,9 @@ struct SystemSoundIsolationModelTests {
 
         #expect(together.buffer.format.channelCount == 3)
         #expect(TestAudio.channels(together.source) == input)
+        let expected = TestAudio.channels(alone.buffer)
         for channel in TestAudio.channels(together.buffer) {
-            #expect(channel == TestAudio.channels(alone.buffer)[0])
+            #expect(channel == expected[0], TestAudio.difference([channel], expected))
         }
     }
 
@@ -77,7 +79,9 @@ struct SystemSoundIsolationModelTests {
 
         for (index, channel) in input.enumerated() {
             let alone = try await isolator.isolate(try TestAudio.buffer([channel]))
-            #expect(TestAudio.channels(together.buffer)[index] == TestAudio.channels(alone.buffer)[0])
+            let output = [TestAudio.channels(together.buffer)[index]]
+            let expected = TestAudio.channels(alone.buffer)
+            #expect(output == expected, TestAudio.difference(output, expected))
         }
     }
 
@@ -91,9 +95,37 @@ struct SystemSoundIsolationModelTests {
         let result = try await TestAudio.collect(isolator.streamIsolation(of: source))
 
         // Live audio and a file give the same samples, whatever the buffer size.
-        #expect(result.isolated == TestAudio.channels(whole.buffer))
+        let expected = TestAudio.channels(whole.buffer)
+        #expect(result.isolated == expected, TestAudio.difference(result.isolated, expected))
         #expect(result.source == [input])
         #expect(result.pieces > 1)
+    }
+
+    /// Streams that run at the same time each give the output that one stream gives.
+    ///
+    /// This test does not show the stop in the unit's disposal that `SoundIsolationUnit` describes:
+    /// that needs the whole process at background priority, as `taskpolicy -b` gives.
+    @Test(.timeLimit(.minutes(2)), arguments: [TaskPriority.medium, .background])
+    func streamsAtTheSameTimeGiveTheSameOutput(priority: TaskPriority) async throws {
+        let input = [TestAudio.voice(seconds: 1, sampleRate: 16_000)]
+        let isolator = SoundIsolator()
+        let expected = TestAudio.channels(
+            try await isolator.isolate(try TestAudio.buffer(input, sampleRate: 16_000)).buffer
+        )
+        let count = 4 * ProcessInfo.processInfo.activeProcessorCount
+        let outputs = try await withThrowingTaskGroup(of: [[Float]].self) { group in
+            for _ in 0 ..< count {
+                group.addTask(priority: priority) {
+                    let audio = try await isolator.isolate(try TestAudio.buffer(input, sampleRate: 16_000))
+                    return TestAudio.channels(audio.buffer)
+                }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+        #expect(outputs.count == count)
+        for output in outputs {
+            #expect(output == expected, TestAudio.difference(output, expected))
+        }
     }
 
     @Test func silenceStaysSilent() async throws {

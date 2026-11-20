@@ -2,6 +2,7 @@ import AVFoundation
 import Accelerate
 import Foundation
 import Synchronization
+import Testing
 
 @testable import AnySoundIsolator
 
@@ -33,6 +34,30 @@ enum TestAudio {
         let samples = makeVoice(seconds: seconds, sampleRate: sampleRate, seed: seed)
         voices.withLock { $0[key] = samples }
         return samples
+    }
+
+    /// Describes how two sets of channels differ, for the message of a failed comparison.
+    ///
+    /// The description tells a small numeric difference from missing or moved audio.
+    static func difference(_ first: [[Float]], _ second: [[Float]]) -> Comment {
+        guard first.count == second.count else {
+            return "\(first.count) channels and \(second.count) channels"
+        }
+        var parts: [String] = []
+        for (channel, (a, b)) in zip(first, second).enumerated() where a != b {
+            guard a.count == b.count else {
+                parts.append("channel \(channel): \(a.count) frames and \(b.count) frames")
+                continue
+            }
+            let different = a.indices.filter { a[$0] != b[$0] }
+            let largest = different.map { abs(a[$0] - b[$0]) }.max() ?? .nan
+            parts.append(
+                "channel \(channel): \(different.count) of \(a.count) frames differ, "
+                    + "from frame \(different.first ?? -1) through \(different.last ?? -1), "
+                    + "largest difference \(largest), levels \(level(a)) and \(level(b))"
+            )
+        }
+        return Comment(rawValue: parts.isEmpty ? "no difference" : parts.joined(separator: "; "))
     }
 
     /// Signals that tests already made; many tests use the same one.

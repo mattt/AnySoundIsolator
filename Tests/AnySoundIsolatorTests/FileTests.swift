@@ -71,7 +71,8 @@ import Testing
 
         // A file and a buffer of the same audio give the same samples.
         let whole = try await isolator.isolate(try TestAudio.buffer([input], sampleRate: 16_000))
-        #expect(isolated == TestAudio.channels(whole.buffer)[0])
+        let expected = TestAudio.channels(whole.buffer)
+        #expect([isolated] == expected, TestAudio.difference([isolated], expected))
         let format = try AVAudioFile(forReading: voice).fileFormat
         #expect(format.sampleRate == 16_000)
         #expect(format.channelCount == 1)
