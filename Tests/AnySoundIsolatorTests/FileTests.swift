@@ -416,4 +416,38 @@ import Testing
         #expect(try Data(contentsOf: source) == original)
         #expect(try Self.names(in: directory) == ["hard.wav", "source.wav", "symbolic.wav"])
     }
+
+    /// Two new names that the volume treats as one name are one destination,
+    /// because the second move would replace the first.
+    @Test func namesThatTheVolumeTreatsAsOneAreOneFile() async throws {
+        let (directory, source, _) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ignoresCase =
+            try directory.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+            .volumeSupportsCaseSensitiveNames == false
+        // APFS and HFS+ treat names with one character in its composed and decomposed forms as one name.
+        let pairs = [
+            ("Voice.wav", "voice.wav", ignoresCase),
+            ("caf\u{E9}.wav", "cafe\u{301}.wav", true),
+        ]
+        for (first, second, isOneFile) in pairs {
+            let voice = directory.appending(path: first)
+            let background = directory.appending(path: second)
+            if isOneFile {
+                await #expect {
+                    try await SoundIsolator(model: StandInModel())
+                        .isolate(contentsOf: source, to: voice, background: background)
+                } throws: {
+                    Self.isUnsupportedConfiguration($0)
+                }
+                #expect(try Self.names(in: directory) == ["source.wav"])
+            } else {
+                try await SoundIsolator(model: StandInModel())
+                    .isolate(contentsOf: source, to: voice, background: background)
+                #expect(try Self.names(in: directory).count == 3)
+                try FileManager.default.removeItem(at: voice)
+                try FileManager.default.removeItem(at: background)
+            }
+        }
+    }
 }

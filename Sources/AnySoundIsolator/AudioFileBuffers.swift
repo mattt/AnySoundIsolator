@@ -124,12 +124,43 @@ enum AudioFile {
     ///
     /// Two different paths name one file when one is a hard link to the other,
     /// or when the file system ignores a difference between them, such as case.
+    /// The second rule also applies when neither file exists yet:
+    /// `Voice.wav` and `voice.wav` in one directory are one file on a volume that ignores case,
+    /// so the second move would replace the first.
     static func isSameFile(_ first: URL, _ second: URL) -> Bool {
         if first == second || first.path == second.path { return true }
-        var firstStatus = stat()
-        var secondStatus = stat()
-        guard stat(first.path, &firstStatus) == 0, stat(second.path, &secondStatus) == 0 else { return false }
-        return firstStatus.st_dev == secondStatus.st_dev && firstStatus.st_ino == secondStatus.st_ino
+        if let firstIdentity = identity(of: first), let secondIdentity = identity(of: second) {
+            return firstIdentity == secondIdentity
+        }
+        // A file is absent, so compare the directories and the names.
+        let directory = first.deletingLastPathComponent()
+        guard let directoryIdentity = identity(of: directory),
+            directoryIdentity == identity(of: second.deletingLastPathComponent())
+        else { return false }
+        // Swift compares strings by canonical equivalence, as APFS and HFS+ compare names.
+        // On a volume that compares the bytes of names, this refuses two names that would be two files.
+        let (firstName, secondName) = (first.lastPathComponent, second.lastPathComponent)
+        if firstName == secondName { return true }
+        // When the volume does not say, the check assumes that it ignores case, as macOS volumes do by default.
+        let isCaseSensitive =
+            (try? directory.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
+            .volumeSupportsCaseSensitiveNames ?? false
+        return !isCaseSensitive
+            && firstName.folding(options: .caseInsensitive, locale: nil)
+                == secondName.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    /// The device and the inode of a file.
+    private struct Identity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+    }
+
+    /// The identity of a file, or `nil` when the file does not exist.
+    private static func identity(of url: URL) -> Identity? {
+        var status = stat()
+        guard stat(url.path, &status) == 0 else { return nil }
+        return Identity(device: status.st_dev, inode: status.st_ino)
     }
 
     /// Creates a file whose type comes from the path extension of its location.
