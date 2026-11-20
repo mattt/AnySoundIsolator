@@ -1,0 +1,46 @@
+AnySoundIsolator
+
+This product includes software adapted from Inworld Voice Isolator
+(https://github.com/inworld-ai/voice-isolator,
+commit c73b3fab81a870410cbac50d2f05f25edc4d10aa),
+licensed under the Apache License, Version 2.0
+(http://www.apache.org/licenses/LICENSE-2.0):
+
+    Inworld Voice Isolator
+    Copyright 2026 Inworld AI
+
+The adapted files are in Sources/AnySoundIsolator, and they are compiled
+only with the MLX package trait:
+
+- Internal/Inworld/InworldSelectiveScan.swift adapts the Metal kernel
+  _METAL_SOURCE in src/inworld/voice_isolation/scan.py.
+- Internal/Inworld/InworldNetwork.swift, InworldSpectralTransform.swift, and
+  InworldConfiguration.swift port the network, its transforms, and its
+  configuration from src/inworld/voice_isolation/model.py.
+- Internal/Inworld/InworldWindowAssembler.swift ports the window placement
+  of VoiceIsolatorNetwork.enhance in src/inworld/voice_isolation/model.py.
+- Internal/Inworld/InworldAssetStore.swift copies the repository, revision,
+  file name, size, and SHA-256 digest of voice-isolator-v1 from
+  src/inworld/voice_isolation/registry.py.
+
+Changes from the original: the code is rewritten in Swift for MLX; the Metal
+kernel reads its sizes from the shapes of its inputs, always applies the gate,
+and carries no state between calls; the window placement works on a stream
+whose length is not known in advance; and only the offline model is ported.
+
+The model weights are not part of this repository. The code downloads them
+from https://huggingface.co/inworld/voice-isolator when an application asks
+for them. Inworld's NOTICE says this about the weights:
+
+    The model weights were trained on Inworld's first-party data, including
+    data purchased from vendors under private terms, and on these third-party
+    datasets:
+
+    - VocalSet — CC BY 4.0, https://zenodo.org/records/1442513
+    - IndicVoices-R — CC BY 4.0,
+      https://huggingface.co/datasets/ai4bharat/indicvoices_r
+    - VCTK — ODC-By 1.0, https://datashare.ed.ac.uk/handle/10283/2119
+
+The test fixtures that scripts/fetch-fixtures.sh downloads are not part of
+this repository. They include a modified LibriSpeech recording under
+CC BY 4.0; see tests/fixtures/README.md in Inworld's repository.

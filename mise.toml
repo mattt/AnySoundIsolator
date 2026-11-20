@@ -1,5 +1,6 @@
 # Swift comes from Xcode, not from mise.
-# No task downloads a model.
+# No task downloads a model unless its description says so.
+# MLX tasks need Apple silicon and the Metal toolchain.
 
 [tasks.setup]
 description = "Resolve Swift package dependencies"
@@ -9,6 +10,10 @@ run = "mise run _swift -- package resolve"
 description = "Build the library and the hush command"
 run = "mise run _swift -- build"
 
+[tasks."build:mlx"]
+description = "Build the library and the hush command with the MLX trait, which adds the Inworld model"
+run = "mise run _swift:mlx -- build --traits MLX"
+
 [tasks."build:ios"]
 description = "Compile the library for iOS without code signing"
 run = "xcodebuild build -scheme AnySoundIsolator -destination 'generic/platform=iOS' -derivedDataPath .build/ios CODE_SIGNING_ALLOWED=NO -quiet"
@@ -16,6 +21,21 @@ run = "xcodebuild build -scheme AnySoundIsolator -destination 'generic/platform=
 [tasks.test]
 description = "Run the tests, which need no model download and no audio files"
 run = "mise run _swift -- test"
+
+[tasks."test:mlx"]
+description = "Run the tests with the MLX trait and its GPU tests, which need no model download"
+env = { ENABLE_MLX_TESTS = "1" }
+run = "mise run _swift:mlx -- test --traits MLX"
+
+[tasks."test:parity"]
+description = "Compare the Inworld model with Inworld's golden fixtures (downloads the checkpoint, 256 MB, unless it is in the Hugging Face cache)"
+depends = ["fetch:fixtures"]
+env = { ENABLE_INWORLD_TESTS = "1" }
+run = "mise run _swift:mlx -- test --traits MLX --filter InworldParityTests"
+
+[tasks."fetch:fixtures"]
+description = "Download Inworld's golden parity fixtures (3 MB, CC BY 4.0) into Fixtures/, which Git ignores"
+run = "scripts/fetch-fixtures.sh"
 
 [tasks.lint]
 description = "Check the formatting of the Swift sources"
@@ -30,6 +50,31 @@ hide = true
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
+
+exec xcrun swift "$@"
+'''
+
+# SwiftPM compiles MLX's Metal shaders, so it needs the Metal compiler.
+# When Xcode does not find it, this helper looks for the downloaded toolchain.
+[tasks."_swift:mlx"]
+hide = true
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! xcrun --find metal >/dev/null 2>&1; then
+    metal_bin=""
+    for candidate in /private/var/run/com.apple.security.cryptexd/mnt/*MetalToolchain*/Metal.xctoolchain/usr/bin; do
+        if [ -x "$candidate/metal" ]; then
+            metal_bin="$candidate"
+        fi
+    done
+    if [ -z "$metal_bin" ]; then
+        echo "error: Metal compiler not found. Run: xcodebuild -downloadComponent MetalToolchain" >&2
+        exit 1
+    fi
+    export PATH="$metal_bin:$PATH"
+fi
 
 exec xcrun swift "$@"
 '''
