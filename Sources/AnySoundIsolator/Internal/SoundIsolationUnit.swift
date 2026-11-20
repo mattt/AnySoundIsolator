@@ -38,9 +38,6 @@ final class SoundIsolationUnit {
     /// The frames by which the output trails the input, as the unit reports, rounded to a whole frame.
     let latency: Int
 
-    /// The number of calls to `AudioUnitInitialize` that the unit needed, 1 unless a call failed.
-    let initializationAttempts: Int
-
     /// The units of the process: those in use, and those that wait for their disposal or are in it.
     struct Census: Equatable {
         var inUse = 0
@@ -53,6 +50,8 @@ final class SoundIsolationUnit {
     private static let counts = Mutex(Census())
 
     /// Waits until every unit that was released has been disposed of.
+    ///
+    /// This blocks the caller's thread. The diagnostic test uses it; the package does not.
     static func waitForDisposals() {
         disposal.sync {}
     }
@@ -148,23 +147,18 @@ final class SoundIsolationUnit {
                     0
                 )
             )
-            self.initializationAttempts = try Self.start(sampleRate: sampleRate, channelCount: channelCount) {
+            try Self.start(sampleRate: sampleRate, channelCount: channelCount) {
                 AudioUnitInitialize(unit)
             }
             // The unit knows its latency after it is initialized with a format.
             var seconds: Float64 = 0
             var size = UInt32(MemoryLayout<Float64>.size)
-            do {
-                try Self.check(
-                    AudioUnitGetProperty(unit, kAudioUnitProperty_Latency, kAudioUnitScope_Global, 0, &seconds, &size)
-                )
-            } catch {
-                AudioUnitUninitialize(unit)
-                throw error
-            }
+            try Self.check(
+                AudioUnitGetProperty(unit, kAudioUnitProperty_Latency, kAudioUnitScope_Global, 0, &seconds, &size)
+            )
             self.latency = Int((seconds * sampleRate).rounded())
         } catch {
-            AudioComponentInstanceDispose(unit)
+            Self.dispose(unit)
             throw error
         }
         self.unit = unit
@@ -174,52 +168,39 @@ final class SoundIsolationUnit {
         Self.counts.withLock { $0.inUse += 1 }
     }
 
-    /// The waits before the second and third calls to `AudioUnitInitialize`, in seconds.
-    private static let initializationRetryDelays = [0.05, 0.25]
-
-    /// Initializes a unit with a closure that calls `AudioUnitInitialize`,
-    /// and returns the number of calls that it took.
+    /// Initializes a unit with a closure that calls `AudioUnitInitialize`.
     ///
     /// The unit can fail to start with `kAudioUnitErr_FailedInitialization` for a format that it supports.
-    /// On virtual machines with macOS 27, this occurred for two channels at 48 kHz with high quality
-    /// in two of four CI runs, while other tests made and disposed of units in the same process.
-    /// The cause is unknown, and nobody has seen a second call succeed.
-    /// The method waits for the disposals of released units and tries again, twice.
-    /// When the unit cannot start at all, this blocks the caller's thread for 0.3 seconds more before the error.
-    /// Any other status is an error at once.
+    /// On a virtual machine with macOS 27, this occurred for two channels at 48 kHz with high quality.
+    /// In one CI run, three units failed in this way after three calls each,
+    /// so a second call does not help, and the method makes one.
+    /// The cause is unknown.
     ///
     /// - Throws: ``SoundIsolationError/unsupportedConfiguration(_:)`` when the unit refuses the format,
-    ///   or ``SoundIsolationError/backendFailure(underlying:)`` when the unit fails to start three times.
-    static func start(sampleRate: Double, channelCount: Int, _ initialize: () -> OSStatus) throws -> Int {
-        var attempts = 0
-        while true {
-            let status = initialize()
-            attempts += 1
-            if status == noErr { return attempts }
-            // The messages name the step and the status,
-            // so that a refused format and a unit that failed to start are different in a report.
-            guard status == kAudioUnitErr_FailedInitialization else {
-                throw SoundIsolationError.unsupportedConfiguration(
-                    "The sound isolation audio unit does not accept \(channelCount) channels "
-                        + "at \(sampleRate) Hz (initialization, status \(status))."
-                )
-            }
-            guard attempts <= initializationRetryDelays.count else {
-                throw SoundIsolationError.backendFailure(
-                    underlying: NSError(
-                        domain: NSOSStatusErrorDomain,
-                        code: Int(status),
-                        userInfo: [
-                            NSLocalizedDescriptionKey:
-                                "The sound isolation audio unit failed to start \(attempts) times "
-                                + "for \(channelCount) channels at \(sampleRate) Hz (status \(status))."
-                        ]
-                    )
-                )
-            }
-            waitForDisposals()
-            Thread.sleep(forTimeInterval: initializationRetryDelays[attempts - 1])
+    ///   or ``SoundIsolationError/backendFailure(underlying:)`` with the status
+    ///   when the unit fails to start for a format that it accepts.
+    static func start(sampleRate: Double, channelCount: Int, _ initialize: () -> OSStatus) throws {
+        let status = initialize()
+        guard status != noErr else { return }
+        // The messages name the step and the status,
+        // so that a refused format and a unit that failed to start are different in a report.
+        guard status == kAudioUnitErr_FailedInitialization else {
+            throw SoundIsolationError.unsupportedConfiguration(
+                "The sound isolation audio unit does not accept \(channelCount) channels "
+                    + "at \(sampleRate) Hz (initialization, status \(status))."
+            )
         }
+        throw SoundIsolationError.backendFailure(
+            underlying: NSError(
+                domain: NSOSStatusErrorDomain,
+                code: Int(status),
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The sound isolation audio unit failed to start "
+                        + "for \(channelCount) channels at \(sampleRate) Hz (status \(status))."
+                ]
+            )
+        )
     }
 
     /// The queue that disposes of units.
@@ -231,15 +212,21 @@ final class SoundIsolationUnit {
     private static let disposal = DispatchQueue(label: "AnySoundIsolator.SoundIsolationUnit.disposal")
 
     deinit {
+        Self.counts.withLock { $0.inUse -= 1 }
+        Self.dispose(unit)
+    }
+
+    /// Uninitializes and disposes of a unit on the disposal queue.
+    ///
+    /// The initializer also disposes of a unit that it could not set up in this way.
+    private static func dispose(_ unit: AudioUnit) {
         nonisolated(unsafe) let unit = unit
-        Self.counts.withLock {
-            $0.inUse -= 1
-            $0.inDisposal += 1
-        }
-        Self.disposal.async {
+        counts.withLock { $0.inDisposal += 1 }
+        disposal.async {
+            // The unit may not be initialized, so the status of this call does not matter.
             AudioUnitUninitialize(unit)
             AudioComponentInstanceDispose(unit)
-            Self.counts.withLock { $0.inDisposal -= 1 }
+            counts.withLock { $0.inDisposal -= 1 }
         }
     }
 

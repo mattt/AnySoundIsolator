@@ -87,36 +87,40 @@ struct SystemSoundIsolationModelTests {
         }
     }
 
-    /// A unit that fails to start is tried three times, and a refused format is an error at once.
-    @Test func unitThatFailsToStartIsTriedAgain() throws {
+    /// A unit that fails to start and a refused format are two different errors after one call,
+    /// and the first keeps the unit's status.
+    @Test func unitThatFailsToStartIsAnErrorAtOnce() throws {
         var calls = 0
-        let attempts = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
-            calls += 1
-            return calls < 3 ? kAudioUnitErr_FailedInitialization : noErr
-        }
-        #expect(attempts == 3)
-
-        calls = 0
         #expect {
-            _ = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
                 calls += 1
                 return kAudioUnitErr_FailedInitialization
             }
         } throws: { error in
             guard case SoundIsolationError.backendFailure(let underlying) = error else { return false }
-            return (underlying as NSError).code == Int(kAudioUnitErr_FailedInitialization)
+            let status = underlying as NSError
+            return status.domain == NSOSStatusErrorDomain
+                && status.code == Int(kAudioUnitErr_FailedInitialization)
+                && status.localizedDescription.contains("status \(kAudioUnitErr_FailedInitialization)")
         }
-        #expect(calls == 3)
+        #expect(calls == 1)
 
         calls = 0
         #expect {
-            _ = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
                 calls += 1
                 return kAudioUnitErr_FormatNotSupported
             }
         } throws: { error in
             guard case SoundIsolationError.unsupportedConfiguration = error else { return false }
             return true
+        }
+        #expect(calls == 1)
+
+        calls = 0
+        try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            calls += 1
+            return noErr
         }
         #expect(calls == 1)
     }

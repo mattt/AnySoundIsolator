@@ -111,8 +111,8 @@ enum TestAudio {
     /// Runs a test of the system's audio unit in which the unit can fail to start.
     ///
     /// On virtual machines with macOS 27, `AudioUnitInitialize` failed with status -10875
-    /// (`kAudioUnitErr_FailedInitialization`) for two channels at 48 kHz with high quality, in two of four CI runs.
-    /// The package tries three times and then throws ``SoundIsolationError/backendFailure(underlying:)``.
+    /// (`kAudioUnitErr_FailedInitialization`) for two channels at 48 kHz with high quality.
+    /// The package makes one call and then throws ``SoundIsolationError/backendFailure(underlying:)``.
     /// Where ``Machine/systemUnitCanDiffer`` is true, that error is a known issue that does not occur in every run.
     /// The cause is unknown. Any other error, and that error on any other machine, fails the test.
     static func withKnownStartFailure(
