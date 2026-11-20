@@ -274,6 +274,8 @@ struct StandInModel: SoundIsolationModel {
     /// Runs at the end of each call to `process`, with the number of frames that the engine has taken.
     /// A test uses it to throw, to cancel the task, or to change a file in the middle of the work.
     var afterProcess: (@Sendable (Int) throws -> Void)? = nil
+    /// Runs at the start of `finish`.
+    var afterFinish: (@Sendable () async -> Void)? = nil
 
     var availability: Availability<Never> { .available }
     var supportedSounds: Set<SoundIsolator.Sound> { sounds }
@@ -288,7 +290,8 @@ struct StandInModel: SoundIsolationModel {
             gain: gain,
             blockSize: blockSize,
             extraFrames: extraFrames,
-            afterProcess: afterProcess
+            afterProcess: afterProcess,
+            afterFinish: afterFinish
         )
     }
 }
@@ -301,6 +304,7 @@ actor StandInExecutor: SoundIsolationExecutor {
     private let blockSize: Int
     private let extraFrames: Int
     private let afterProcess: (@Sendable (Int) throws -> Void)?
+    private let afterFinish: (@Sendable () async -> Void)?
     private var held: AudioSamples
     private var taken = 0
 
@@ -311,7 +315,8 @@ actor StandInExecutor: SoundIsolationExecutor {
         gain: Float,
         blockSize: Int,
         extraFrames: Int,
-        afterProcess: (@Sendable (Int) throws -> Void)? = nil
+        afterProcess: (@Sendable (Int) throws -> Void)? = nil,
+        afterFinish: (@Sendable () async -> Void)? = nil
     ) {
         self.sampleRate = sampleRate
         self.channelCount = channelCount
@@ -320,6 +325,7 @@ actor StandInExecutor: SoundIsolationExecutor {
         self.blockSize = blockSize
         self.extraFrames = extraFrames
         self.afterProcess = afterProcess
+        self.afterFinish = afterFinish
         // The output starts with silence as long as the latency.
         self.held = AudioSamples(channelCount: channelCount, frameCount: latency)
     }
@@ -333,7 +339,8 @@ actor StandInExecutor: SoundIsolationExecutor {
         return held.removeFirst(ready / blockSize * blockSize)
     }
 
-    func finish() -> AudioSamples {
+    func finish() async -> AudioSamples {
+        await afterFinish?()
         var rest = held.removeFirst(held.frameCount)
         rest.resize(to: max(0, rest.frameCount + extraFrames))
         return rest

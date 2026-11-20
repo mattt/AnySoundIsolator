@@ -16,7 +16,11 @@ import AVFoundation
 /// an engine with latency returns the first frames late, and the rest after the source ends.
 ///
 /// To stop early, stop iterating or cancel the task.
+/// A cancelled stream throws `CancellationError`,
+/// also when its source ends without an error because the task is cancelled, as `AsyncStream` does.
 /// An error from the source ends the stream with that error.
+/// An error is the end of the stream: the iterator returns `nil` afterward
+/// and does not give the engine the audio that it had not processed.
 public struct IsolationStream<Source: AsyncSequence>: AsyncSequence
 where Source.Element == AudioInput {
     /// A piece of isolated sound with the input frames that it came from.
@@ -54,25 +58,38 @@ where Source.Element == AudioInput {
         /// Reads the source until some isolated sound is ready, and returns it.
         ///
         /// - Parameter actor: The actor that the caller runs on.
-        /// - Returns: The next piece of isolated sound, or `nil` after the last one.
+        /// - Returns: The next piece of isolated sound, or `nil` after the last one or after an error.
         /// - Throws: A ``SoundIsolationError``, an error from the source, or `CancellationError`.
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> IsolatedAudio? {
-            while ready.isEmpty {
-                guard !isFinished else { return nil }
-                try Task.checkCancellation()
-                if let input = try await source.next(isolation: actor) {
-                    let samples = try intake.samples(from: input.buffer)
-                    let sampleRate = input.buffer.format.sampleRate
-                    ready = try await pipeline.process(samples, sampleRate: sampleRate)
-                } else {
-                    isFinished = true
-                    ready = try await pipeline.finish()
+            do {
+                while ready.isEmpty {
+                    guard !isFinished else { return nil }
+                    try Task.checkCancellation()
+                    let input = try await source.next(isolation: actor)
+                    // A source such as `AsyncStream` returns `nil` when its task is cancelled.
+                    // That is not the end of the input, so do not flush the engine.
+                    try Task.checkCancellation()
+                    if let input {
+                        let samples = try intake.samples(from: input.buffer)
+                        let sampleRate = input.buffer.format.sampleRate
+                        ready = try await pipeline.process(samples, sampleRate: sampleRate)
+                    } else {
+                        isFinished = true
+                        ready = try await pipeline.finish()
+                    }
                 }
+                // The engine can take a long time, so check again before delivery.
+                try Task.checkCancellation()
+                guard let format = intake.format else { return nil }
+                return try IsolatedAudio(ready.removeFirst(), format: format)
+            } catch {
+                // A failure is the end of the stream.
+                isFinished = true
+                ready = []
+                throw error
             }
-            guard let format = intake.format else { return nil }
-            return try IsolatedAudio(ready.removeFirst(), format: format)
         }
     }
 }

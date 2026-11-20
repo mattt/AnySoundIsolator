@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 import Testing
 
 @testable import AnySoundIsolator
@@ -362,6 +363,80 @@ import Testing
         await #expect(throws: CancellationError.self) {
             _ = try await task.value
         }
+    }
+
+    /// `AsyncStream` ends without an error when the task that waits for it is cancelled.
+    /// The isolator does not read that as the end of the input.
+    @Test func cancellationWhileTheSourceWaitsThrows() async throws {
+        let finished = Counter()
+        let isolator = SoundIsolator(model: StandInModel(latency: 100, afterFinish: { await finished.increment() }))
+        let (buffers, continuation) = AsyncStream<AudioInput>.makeStream()
+        let (pieces, delivered) = AsyncStream<Int>.makeStream()
+        continuation.yield(AudioInput(buffer: try TestAudio.buffer([input])))
+        let task = Task {
+            var frames = 0
+            for try await audio in isolator.streamIsolation(of: buffers) {
+                frames += Int(audio.buffer.frameLength)
+                delivered.yield(frames)
+            }
+            return frames
+        }
+        // The first piece arrived, so the stream now waits for input that never comes.
+        var iterator = pieces.makeAsyncIterator()
+        _ = await iterator.next()
+        try await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+        // The engine was not asked for the rest of its output.
+        #expect(await finished.value == 0)
+        continuation.finish()
+    }
+
+    @Test func failureEndsTheStream() async throws {
+        struct SourceFailure: Error {}
+        let buffer = try TestAudio.buffer([Array(input.prefix(1_000))])
+        let calls = Mutex(0)
+        let source = Buffers {
+            let call = calls.withLock { value in
+                value += 1
+                return value
+            }
+            if call == 2 { throw SourceFailure() }
+            return buffer
+        }
+        var iterator = SoundIsolator(model: StandInModel()).streamIsolation(of: source).makeAsyncIterator()
+        #expect(try await iterator.next()?.buffer.frameLength == 1_000)
+        await #expect(throws: SourceFailure.self) {
+            _ = try await iterator.next()
+        }
+        // The source would return more audio, but the stream ended with the error.
+        #expect(try await iterator.next() == nil)
+        #expect(try await iterator.next() == nil)
+        #expect(calls.withLock { $0 } == 2)
+    }
+
+    @Test func engineFailureEndsTheStream() async throws {
+        struct EngineFailure: Error {}
+        let buffer = try TestAudio.buffer([Array(input.prefix(1_000))])
+        let calls = Mutex(0)
+        let model = StandInModel(afterProcess: { frames in
+            calls.withLock { $0 += 1 }
+            if frames > 1_000 { throw EngineFailure() }
+        })
+        var iterator = SoundIsolator(model: model).streamIsolation(of: Buffers { buffer }).makeAsyncIterator()
+        #expect(try await iterator.next()?.buffer.frameLength == 1_000)
+        await #expect {
+            _ = try await iterator.next()
+        } throws: { error in
+            guard case SoundIsolationError.backendFailure(let underlying) = error else { return false }
+            return underlying is EngineFailure
+        }
+        #expect(try await iterator.next() == nil)
+        // The engine was not called again with the audio that failed or with new audio.
+        #expect(calls.withLock { $0 } == 2)
     }
 
     @Test func assetRequestRunsOnlyWhenAsked() async throws {
