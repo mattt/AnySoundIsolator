@@ -232,6 +232,12 @@ selects a mono downmix by default or one audio unit per channel with `perChannel
 In a live stream, the audio unit delays each frame
 because it needs the following audio to isolate it.
 
+The audio unit does not always give the same samples for the same audio.
+On an M4 Max running macOS 27, a buffer, a stream, and a file gave identical samples.
+On virtual machines running macOS 27, two runs differed in most samples
+but kept the same length, timing, and level; the cause is unknown.
+Do not compare the system model's output sample for sample.
+
 #### Performance
 
 A release build of `silence` processed 10 minutes of synthetic 48 kHz audio

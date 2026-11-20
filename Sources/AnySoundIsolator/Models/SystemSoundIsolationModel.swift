@@ -31,6 +31,12 @@ import AudioToolbox
 /// At a sample rate that does not divide 48,000, such as 44.1 kHz,
 /// the delay is not a whole number of frames,
 /// so the output can be off the input's timeline by less than one frame.
+///
+/// The audio unit does not always give the same samples for the same audio.
+/// On an Apple M4 Max with macOS 27, a buffer, a stream, and a file of the same audio gave the same samples.
+/// On virtual machines with macOS 27, two runs on the same audio differed in most samples,
+/// with the same length, place in time, and level.
+/// Do not compare the model's output sample for sample.
 public struct SystemSoundIsolationModel: SoundIsolationModel {
     /// The voice isolation that the audio unit performs.
     public enum Quality: String, Sendable, CaseIterable {

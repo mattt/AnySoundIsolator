@@ -5,11 +5,14 @@ import AudioToolbox
 ///
 /// The unit renders a block of output when asked and pulls the same number of input frames
 /// through a callback, so the same code serves a whole file and a live stream.
-/// Its output does not depend on the size of the blocks.
+/// On an Apple M4 Max with macOS 27, its output does not depend on the size of the blocks.
 /// It does depend on the position of the stack at the render call,
-/// so every render call is made from a fixed position:
-/// two units in one process give the same output for the same samples.
-/// The output can differ between builds of the package and between versions of the system.
+/// so every render call is made from a fixed position.
+/// With that, two units in one process gave the same output for the same samples on that Mac.
+/// The package does not promise this on every machine:
+/// on virtual machines with macOS 27, two renders of the same samples differed in some runs,
+/// in most frames and with the same level, for a cause that is not known.
+/// The output can also differ between builds of the package and between versions of the system.
 /// The output trails the input by ``latency`` frames.
 final class SoundIsolationUnit {
     /// The largest number of frames in one render call.
