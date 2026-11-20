@@ -1,51 +1,40 @@
 # ``AnySoundIsolator``
 
-Isolate a sound, such as a voice, from a recording or a live stream, with a choice of engine.
+Isolate a voice or other sound from recorded or live audio.
 
 ## Overview
 
-Create a ``SoundIsolator`` with a ``SoundIsolationModel``, which is the engine that does the work.
-The default is ``SystemSoundIsolationModel``,
-which uses the operating system's sound isolation audio unit and needs no download.
+Create a ``SoundIsolator`` with a ``SoundIsolationModel``.
+The default ``SystemSoundIsolationModel`` uses Apple's sound isolation audio unit without a download.
 
 ```swift
 let isolator = SoundIsolator()
 try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
-Give the isolator a file with ``SoundIsolator/isolate(contentsOf:to:background:options:progress:)``,
-one buffer with ``SoundIsolator/isolate(_:options:isolation:)``,
-or a sequence of audio with ``SoundIsolator/streamIsolation(of:options:)``.
-``SoundIsolator/streamIsolation(contentsOf:options:)`` reads a file
-and returns results while the file is processed.
+Use ``SoundIsolator/isolate(contentsOf:to:background:options:progress:)`` for files,
+``SoundIsolator/isolate(_:options:isolation:)`` for one buffer,
+or ``SoundIsolator/streamIsolation(of:options:)`` for a sequence of buffers.
+For results as a file is processed, use ``SoundIsolator/streamIsolation(contentsOf:options:)``.
 
-Every model gives output with the same properties.
-The isolated sound has the input's sample rate, channel count, and number of frames,
-and frame `n` of the output corresponds to frame `n` of the input.
-The isolator removes an engine's delay and fixes the length of the output;
-an engine only states its latency.
+The isolator compensates for the latency each engine reports
+and preserves the input's sample rate, channel count, and frame count.
+Each ``IsolatedAudio`` holds the matching input frames
+and computes each channel's background (input minus isolated sound) or a mix.
 
-Because the output matches the input frame for frame,
-the sound that was removed is the input minus the output.
-``IsolatedAudio`` carries the matching input frames
-and computes the background and a mix of the two.
+``IsolationOptions/channelPolicy`` applies
+when the input has more channels than the engine accepts.
+By default, the isolator averages the channels, runs a mono engine once
+even for stereo input, and copies the result to every channel.
 
-When the input has more channels than the engine takes,
-``IsolationOptions/channelPolicy`` selects what the isolator does.
-By default it averages the channels, isolates the sound once,
-and puts the result in every channel of the output,
-so a mono engine does the same work for a stereo recording as for a mono one.
-The background of each channel is still that channel's input minus the output.
-
-A model that needs files installs them through an ``AssetInstallationRequest``,
-which ``SoundIsolator/assetInstallationRequest()`` returns.
-Isolation never downloads.
+Install model files with the ``AssetInstallationRequest`` from
+``SoundIsolator/assetInstallationRequest()``.
+Isolation never downloads files.
 
 ### The Inworld model
 
-When you enable the package's `MLX` trait, the package also has `InworldSoundIsolationModel`,
+For recordings, the `MLX` trait adds `InworldSoundIsolationModel`,
 which runs Inworld's Voice Isolator on the GPU with MLX.
-Use it for recordings, where its quality is worth its cost:
 
 ```swift
 let isolator = SoundIsolator(model: InworldSoundIsolationModel())
@@ -55,18 +44,19 @@ if let request = try await isolator.assetInstallationRequest() {
 try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
-The request downloads one file of 256 MB into the Hugging Face cache and verifies it.
+The request downloads and verifies one 256 MB file in the Hugging Face cache.
 In a sandboxed app, the file goes into the app's container.
-On an Apple M4 Max on 2026-11-20, the model isolated about 10 seconds of audio in each second,
-with a peak memory footprint of 4.2 to 4.6 GB.
+
+On 2026-11-20, an Apple M4 Max processed about 10 seconds of audio per second.
+Peak memory use was 4.2 to 4.6 GB.
 The network works in windows of 8 seconds,
 so a stream receives its first frames after 8 seconds of input.
-A stream and a file with the same audio give the same frames.
+File and stream input produce the same frames for the same audio.
 
 The trait supports macOS on Apple silicon.
 The model compiles for iOS, but it is not run there,
 and one window needs more memory than iOS gives to most apps.
-This documentation shows the model's symbols only when it is built with the trait.
+Only documentation built with the trait includes the model's symbols.
 
 ## Topics
 
@@ -85,8 +75,6 @@ This documentation shows the model's symbols only when it is built with the trai
 ### Models
 
 - ``SystemSoundIsolationModel``
-
-<!-- With the MLX trait, the package also has InworldSoundIsolationModel. -->
 
 ### Custom models
 
