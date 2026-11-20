@@ -149,9 +149,20 @@ final class SoundIsolationUnit {
         self.output = output
     }
 
+    /// The queue that disposes of units.
+    ///
+    /// The unit's disposal waits for work that the unit put on a dispatch queue of its own.
+    /// That work needs a thread. When every thread of Swift's cooperative pool waits in a disposal,
+    /// such as at the end of many streams at a low priority, no thread remains, and the process stops.
+    /// A disposal on this queue does not hold a thread of the pool.
+    private static let disposal = DispatchQueue(label: "AnySoundIsolator.SoundIsolationUnit.disposal")
+
     deinit {
-        AudioUnitUninitialize(unit)
-        AudioComponentInstanceDispose(unit)
+        nonisolated(unsafe) let unit = unit
+        Self.disposal.async {
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+        }
     }
 
     /// Renders output frames while the unit reads the input.
