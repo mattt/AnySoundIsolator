@@ -69,12 +69,9 @@
                 let checkpoint = InworldFixture.checkpoint(for: data)
                 // One store downloads, as another tool would. A store with other markers sees an unverified file.
                 try await server.makeStore(root: root).install(checkpoint)
+                // The second store has the stub protocol also, so that the server records any request.
                 let other = StubModelServer(files: [:])
-                let store = InworldAssetStore(
-                    cacheDirectory: root.appending(path: "hub"),
-                    markerDirectory: root.appending(path: "other-markers"),
-                    host: URL(string: "https://\(other.host)")!
-                )
+                let store = other.makeStore(root: root, markers: "other-markers")
                 #expect(store.status(of: checkpoint) == .missing)
                 try await store.install(checkpoint)
                 #expect(store.status(of: checkpoint) == .installed)

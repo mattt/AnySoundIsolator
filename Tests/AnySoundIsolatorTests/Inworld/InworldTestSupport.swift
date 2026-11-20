@@ -53,12 +53,16 @@
         func setFile(_ path: String, _ data: Data) { state.withLock { $0.files[path] = data } }
 
         /// Creates a store that downloads from this server into a cache under `root`.
-        func makeStore(root: URL) -> InworldAssetStore {
+        ///
+        /// - Parameters:
+        ///   - root: The directory for the cache and the markers.
+        ///   - markers: The name of the marker directory. A store with another name sees no file as verified.
+        func makeStore(root: URL, markers: String = "verified") -> InworldAssetStore {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [StubModelProtocol.self]
             return InworldAssetStore(
                 cacheDirectory: root.appending(path: "hub"),
-                markerDirectory: root.appending(path: "verified"),
+                markerDirectory: root.appending(path: markers),
                 session: URLSession(configuration: configuration),
                 host: URL(string: "https://\(host)")!
             )
