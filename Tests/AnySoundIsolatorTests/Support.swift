@@ -487,3 +487,27 @@ actor StandInExecutor: SoundIsolationExecutor {
         return rest
     }
 }
+
+/// Waits until a condition is true, for a state that a test cannot observe through a signal,
+/// such as a call that waits in a queue.
+///
+/// The wait has a limit, so a state that never comes fails the test instead of stopping the run.
+///
+/// - Throws: ``WaitTimedOut`` when the condition is still false after the limit.
+func waitUntil(
+    _ description: String,
+    limit: Duration = .seconds(10),
+    _ condition: () async -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + limit
+    while await !condition() {
+        guard ContinuousClock.now < deadline else { throw WaitTimedOut(description: description) }
+        // The poll interval is not a stand-in for the state: the loop ends when the state is there.
+        try await Task.sleep(for: .milliseconds(1))
+    }
+}
+
+/// The error of a wait for a state that did not come.
+struct WaitTimedOut: Error, CustomStringConvertible {
+    let description: String
+}

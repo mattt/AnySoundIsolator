@@ -240,6 +240,7 @@ public struct SoundIsolator: Sendable {
         options: IsolationOptions = IsolationOptions(),
         isolation actor: isolated (any Actor)? = #isolation
     ) async throws -> IsolatedAudio {
+        try Task.checkCancellation()
         var intake = Intake()
         let samples = try intake.samples(from: buffer)
         let sampleRate = buffer.format.sampleRate
@@ -259,6 +260,8 @@ public struct SoundIsolator: Sendable {
             result.isolated.append(piece.isolated)
             result.source.append(piece.source)
         }
+        // The engine can return from `finish()` after the task was cancelled.
+        try Task.checkCancellation()
         return try IsolatedAudio(result, format: format)
     }
 }

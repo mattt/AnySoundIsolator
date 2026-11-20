@@ -396,6 +396,25 @@ import Testing
         continuation.finish()
     }
 
+    /// The single-buffer method checks for cancellation before it reads the buffer,
+    /// and again after the engine's last call, so a cancelled task never gets a result.
+    @Test func cancellationStopsOneBuffer() async throws {
+        let executors = Counter()
+        let input = input
+        let before = Task {
+            let buffer = try TestAudio.buffer([input])
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await SoundIsolator(model: StandInModel(executors: executors)).isolate(buffer)
+        }
+        await #expect(throws: CancellationError.self) { _ = try await before.value }
+        #expect(await executors.value == 0)
+
+        // The engine returns from `finish()` after the task was cancelled in it.
+        let model = StandInModel(afterFinish: { withUnsafeCurrentTask { $0?.cancel() } })
+        let during = Task { try await SoundIsolator(model: model).isolate(try TestAudio.buffer([input])) }
+        await #expect(throws: CancellationError.self) { _ = try await during.value }
+    }
+
     @Test func failureEndsTheStream() async throws {
         struct SourceFailure: Error {}
         let buffer = try TestAudio.buffer([Array(input.prefix(1_000))])

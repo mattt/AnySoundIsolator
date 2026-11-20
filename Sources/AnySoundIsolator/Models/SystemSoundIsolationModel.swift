@@ -101,6 +101,14 @@ public struct SystemSoundIsolationModel: SoundIsolationModel {
 }
 
 /// Runs one instance of the sound isolation audio unit for one stream.
+///
+/// A call that throws before the unit reads the input,
+/// because the input does not match the executor or the task is cancelled,
+/// leaves the executor as it was.
+/// The unit renders the input in blocks and checks for cancellation before each one.
+/// A call that is cancelled after the first block has given part of its input to the unit,
+/// which cannot be undone, so later output from the executor is not on the input's timeline.
+/// Make a new executor for the rest of the stream.
 actor SystemSoundIsolationExecutor: SoundIsolationExecutor {
     nonisolated let sampleRate: Double
     nonisolated let channelCount: Int

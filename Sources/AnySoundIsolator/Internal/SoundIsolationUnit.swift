@@ -239,6 +239,8 @@ final class SoundIsolationUnit {
     /// - Returns: The next `frameCount` frames of the unit's output.
     /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the input does not have the unit's channel count
     ///   or its channels have different lengths, before the unit reads it.
+    ///   `CancellationError` before each block of up to 4,096 frames when the task is cancelled.
+    ///   After an error from a later block, the unit has rendered part of the input.
     func render(_ input: AudioSamples, frameCount: Int) throws -> AudioSamples {
         // The render callback copies the same number of frames from each channel,
         // so a short channel would be read past its end.
@@ -259,6 +261,7 @@ final class SoundIsolationUnit {
         }
         var rendered = 0
         while rendered < frameCount {
+            try Task.checkCancellation()
             let count = min(Self.maximumFrames, frameCount - rendered)
             let available = max(0, min(count, input.frameCount - rendered))
             try withPointers(to: input.channels, offset: rendered) { pointers in

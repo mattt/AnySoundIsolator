@@ -158,6 +158,21 @@ struct SystemSoundIsolationModelTests {
         #expect(output.frameCount == voice.count)
     }
 
+    /// The unit checks for cancellation before each block, so a cancelled call does not reach the unit,
+    /// and the executor still works.
+    @Test func cancelledCallDoesNotReachTheUnit() async throws {
+        let executor = try await SystemSoundIsolationModel(quality: .standard).makeExecutor(
+            for: SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+        )
+        let input = AudioSamples(channels: [TestAudio.voice(seconds: 0.5)])
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await executor.process(input)
+        }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(try await executor.process(input).frameCount == input.frameCount)
+    }
+
     @Test func threeChannelsAreDownmixedByDefault() async throws {
         let input = (1 ... 3).map { TestAudio.voice(seconds: 1, seed: UInt64($0)) }
         let isolator = SoundIsolator()

@@ -183,6 +183,39 @@
             }
         }
 
+        /// A call that is cancelled while it waits for another leaves the queue and takes none of its input.
+        @Test func callCancelledWhileItWaitsTakesNoInput() async throws {
+            try await withTemporaryDirectory { directory in
+                let checkpoint = directory.appending(path: "small.safetensors")
+                try InworldFixture.writeSmallCheckpoint(to: checkpoint)
+                let model = InworldSoundIsolationModel(assets: .file(checkpoint))
+                let request = SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+                let piece = AudioSamples(channels: [Array(TestAudio.voice(seconds: 0.26).prefix(7_000))])
+
+                let alone = try await model.makeExecutor(for: request)
+                let expected = try await alone.process(piece).channels[0]
+                let expectedRest = try await alone.finish().channels[0]
+
+                let executor = try #require(
+                    try await model.makeExecutor(for: request) as? InworldSoundIsolationExecutor
+                )
+                // The test holds the queue, so the call waits. A failure below still releases it.
+                try await executor.admission.enter()
+                var isHeld = true
+                defer { if isHeld { executor.admission.leave() } }
+                let waiting = Task { try await executor.process(piece) }
+                try await waitUntil("the call waits") { executor.admission.waitingCount == 1 }
+                waiting.cancel()
+                await #expect(throws: CancellationError.self) { _ = try await waiting.value }
+                #expect(executor.admission.waitingCount == 0)
+                executor.admission.leave()
+                isHeld = false
+
+                #expect(try await executor.process(piece).channels[0] == expected)
+                #expect(try await executor.finish().channels[0] == expectedRest)
+            }
+        }
+
         @Test func audioThatIsNotFiniteIsRefused() async throws {
             try await withTemporaryDirectory { directory in
                 let checkpoint = directory.appending(path: "small.safetensors")
