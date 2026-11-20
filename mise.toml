@@ -1,0 +1,35 @@
+# Swift comes from Xcode, not from mise.
+# No task downloads a model.
+
+[tasks.setup]
+description = "Resolve Swift package dependencies"
+run = "mise run _swift -- package resolve"
+
+[tasks.build]
+description = "Build the library"
+run = "mise run _swift -- build"
+
+[tasks."build:ios"]
+description = "Compile the library for iOS without code signing"
+run = "xcodebuild build -scheme AnySoundIsolator -destination 'generic/platform=iOS' -derivedDataPath .build/ios CODE_SIGNING_ALLOWED=NO -quiet"
+
+[tasks.test]
+description = "Run the tests, which need no model download and no audio files"
+run = "mise run _swift -- test"
+
+[tasks.lint]
+description = "Check the formatting of the Swift sources"
+run = "mise run _swift -- format lint --strict --recursive ."
+
+[tasks.format]
+description = "Format the Swift sources in place"
+run = "mise run _swift -- format --in-place --recursive ."
+
+[tasks."_swift"]
+hide = true
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec xcrun swift "$@"
+'''
