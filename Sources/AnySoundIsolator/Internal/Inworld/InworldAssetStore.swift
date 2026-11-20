@@ -45,8 +45,12 @@
     ///
     /// After the file matches its size and its SHA-256 digest,
     /// the store writes a verification marker in its own directory.
-    /// A status check then compares the file's size and file number with the marker
-    /// and computes no digest, so it is fast enough to run before each stream.
+    /// The marker records the identity of the file that was hashed:
+    /// its device, file number, size, and times of modification and of status change.
+    /// A status check then compares the file with the marker and computes no digest,
+    /// so it is fast enough to run before each stream.
+    /// A file that was replaced or edited in place has another identity,
+    /// reads as not installed, and is hashed again by the next installation.
     /// Callers that install the same checkpoint at the same time share one download.
     final class InworldAssetStore: Sendable {
         /// The local state of a checkpoint.
@@ -62,8 +66,31 @@
             var checkpoint: InworldCheckpoint
             /// The location of the verified file.
             var file: String
-            /// The file system number of the file's contents, so that a replaced file reads as unverified.
-            var fileNumber: UInt64
+            /// The identity of the file that was hashed,
+            /// so that a file that is replaced or edited in place reads as unverified.
+            var identity: FileIdentity
+        }
+
+        /// What the file system records about one state of a file's contents.
+        ///
+        /// A write to the file changes its times, and a new file has another number.
+        /// The time of status change cannot be set back, as the time of modification can.
+        struct FileIdentity: Sendable, Hashable, Codable {
+            var device: Int64
+            var number: UInt64
+            var size: Int64
+            /// The time of the last modification, in nanoseconds.
+            var modified: Int64
+            /// The time of the last status change, in nanoseconds.
+            var changed: Int64
+
+            init(_ info: stat) {
+                device = Int64(info.st_dev)
+                number = UInt64(info.st_ino)
+                size = Int64(info.st_size)
+                modified = Int64(info.st_mtimespec.tv_sec) * 1_000_000_000 + Int64(info.st_mtimespec.tv_nsec)
+                changed = Int64(info.st_ctimespec.tv_sec) * 1_000_000_000 + Int64(info.st_ctimespec.tv_nsec)
+            }
         }
 
         private final class Installation: Sendable {
@@ -158,14 +185,14 @@
             return markerDirectory.appending(path: "\(name)--\(checkpoint.revision)--\(digest).json")
         }
 
-        /// Checks the verification marker, the file's size, and its file number,
+        /// Checks the verification marker against the file's size and identity,
         /// without network access and without computing a digest.
         func status(of checkpoint: InworldCheckpoint) -> Status {
             let file = fileURL(for: checkpoint)
             guard let data = try? Data(contentsOf: markerURL(for: checkpoint)),
                 let marker = try? JSONDecoder().decode(VerificationMarker.self, from: data),
                 marker.checkpoint == checkpoint, marker.file == file.standardizedFileURL.path,
-                let info = Self.fileInfo(file), info.size == checkpoint.size, info.number == marker.fileNumber
+                let identity = Self.fileIdentity(file), identity.size == checkpoint.size, identity == marker.identity
             else { return .missing }
             return .installed
         }
@@ -217,12 +244,12 @@
                 try Task.checkCancellation()
                 // Verify the pinned location, not the returned one,
                 // so that a response for another commit cannot satisfy the checkpoint.
-                let number = try verify(checkpoint)
+                let identity = try verify(checkpoint)
                 try FileManager.default.createDirectory(at: markerDirectory, withIntermediateDirectories: true)
                 let record = VerificationMarker(
                     checkpoint: checkpoint,
                     file: file.standardizedFileURL.path,
-                    fileNumber: number
+                    identity: identity
                 )
                 try JSONEncoder().encode(record).write(to: marker, options: .atomic)
                 progress.completedUnitCount = checkpoint.size
@@ -233,26 +260,40 @@
         /// Checks the size and the SHA-256 digest of the file in the cache,
         /// and removes the file when either is wrong.
         ///
-        /// - Returns: The file system number of the file's contents.
-        private func verify(_ checkpoint: InworldCheckpoint) throws -> UInt64 {
+        /// The identity comes from the open file that is hashed, before and after the digest,
+        /// and the location must still name that file afterward.
+        /// A file that changes during the check is not recorded as verified.
+        ///
+        /// - Returns: The identity of the file that was hashed.
+        private func verify(_ checkpoint: InworldCheckpoint) throws -> FileIdentity {
             let file = fileURL(for: checkpoint)
             func reject(_ reason: String) -> SoundIsolationError {
                 discard(file, of: checkpoint)
                 return .assetVerificationFailed("The model file \(checkpoint.path) failed verification: \(reason)")
             }
-            guard let info = Self.fileInfo(file) else {
+            guard Self.fileIdentity(file) != nil, let reader = try? FileHandle(forReadingFrom: file),
+                let identity = Self.fileIdentity(descriptor: reader.fileDescriptor)
+            else {
                 throw SoundIsolationError.assetVerificationFailed(
                     "The model file \(checkpoint.path) is not in the cache at the pinned revision."
                 )
             }
-            guard info.size == checkpoint.size else {
-                throw reject("expected \(checkpoint.size) bytes, received \(info.size) bytes.")
+            defer { try? reader.close() }
+            guard identity.size == checkpoint.size else {
+                throw reject("expected \(checkpoint.size) bytes, received \(identity.size) bytes.")
             }
-            let digest = try Self.sha256(of: file)
+            let digest = try Self.sha256(of: reader)
+            guard Self.fileIdentity(descriptor: reader.fileDescriptor) == identity,
+                Self.fileIdentity(file) == identity
+            else {
+                throw SoundIsolationError.assetVerificationFailed(
+                    "The model file \(checkpoint.path) changed while it was verified."
+                )
+            }
             guard digest == checkpoint.sha256 else {
                 throw reject("expected SHA-256 \(checkpoint.sha256), received \(digest).")
             }
-            return info.number
+            return identity
         }
 
         /// Removes the file's entry in the snapshot and the blob that it links to.
@@ -294,17 +335,29 @@
             Repo.ID(rawValue: checkpoint.repository) ?? Repo.ID(namespace: "", name: checkpoint.repository)
         }
 
-        /// The size and the file system number of a regular file, following symbolic links.
-        static func fileInfo(_ url: URL) -> (size: Int64, number: UInt64)? {
+        /// The identity of the regular file at a location, following symbolic links.
+        static func fileIdentity(_ url: URL) -> FileIdentity? {
             var info = stat()
             guard stat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
-            return (Int64(info.st_size), UInt64(info.st_ino))
+            return FileIdentity(info)
+        }
+
+        /// The identity of an open regular file.
+        static func fileIdentity(descriptor: Int32) -> FileIdentity? {
+            var info = stat()
+            guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+            return FileIdentity(info)
         }
 
         /// The lowercase hexadecimal SHA-256 digest of a file's contents.
         static func sha256(of url: URL) throws -> String {
             let reader = try FileHandle(forReadingFrom: url)
             defer { try? reader.close() }
+            return try sha256(of: reader)
+        }
+
+        /// The lowercase hexadecimal SHA-256 digest of an open file, from its current position to its end.
+        static func sha256(of reader: FileHandle) throws -> String {
             var hasher = SHA256()
             // Each read returns an autoreleased buffer.
             // A pool for each block keeps the memory of the whole file from staying resident.

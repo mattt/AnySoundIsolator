@@ -97,6 +97,48 @@
             }
         }
 
+        /// An edit in place keeps the file's number and its size.
+        /// The marker also records the file's times, so the edit is noticed without a digest.
+        @Test(arguments: [false, true])
+        func fileEditedInPlaceReadsAsNotInstalled(restoresModificationDate: Bool) async throws {
+            try await withTemporaryDirectory { root in
+                let server = StubModelServer(files: [InworldFixture.path: data])
+                let store = server.makeStore(root: root)
+                let checkpoint = InworldFixture.checkpoint(for: data)
+                try await store.install(checkpoint)
+                let file = store.fileURL(for: checkpoint).resolvingSymlinksInPath()
+                let before = try #require(InworldAssetStore.fileIdentity(file))
+                let modified = try #require(
+                    try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date
+                )
+
+                let handle = try FileHandle(forUpdating: file)
+                try handle.seek(toOffset: 100)
+                try handle.write(contentsOf: Data([data[100] ^ 0xFF]))
+                try handle.close()
+                if restoresModificationDate {
+                    try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: file.path)
+                }
+
+                let after = try #require(InworldAssetStore.fileIdentity(file))
+                #expect(after.number == before.number)
+                #expect(after.size == before.size)
+                #expect(after.changed != before.changed)
+                #expect(store.status(of: checkpoint) == .missing)
+
+                // The next installation computes the digest again and refuses the edited file.
+                let requests = server.requests.count
+                await #expect {
+                    try await store.install(checkpoint)
+                } throws: { error in
+                    guard case SoundIsolationError.assetVerificationFailed = error else { return false }
+                    return true
+                }
+                #expect(server.requests.count == requests)
+                #expect(store.status(of: checkpoint) == .missing)
+            }
+        }
+
         @Test func concurrentRequestsShareOneDownload() async throws {
             try await withTemporaryDirectory { root in
                 let server = StubModelServer(files: [InworldFixture.path: data])

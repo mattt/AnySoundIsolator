@@ -135,7 +135,7 @@
                     if store.isInstalling(checkpoint) { return .unavailable(.assetsInstalling) }
                     return store.status(of: checkpoint) == .installed ? .available : .unavailable(.assetsNotInstalled)
                 case .file(let url):
-                    return InworldAssetStore.fileInfo(url) != nil ? .available : .unavailable(.assetsNotInstalled)
+                    return InworldAssetStore.fileIdentity(url) != nil ? .available : .unavailable(.assetsNotInstalled)
                 }
             #else
                 return .unavailable(.unsupportedHardware)
