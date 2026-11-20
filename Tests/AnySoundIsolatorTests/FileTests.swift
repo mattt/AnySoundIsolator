@@ -100,6 +100,35 @@ import Testing
         #expect(try await TestAudio.read(voice) == decoded)
     }
 
+    @Test func fourChannelFileKeepsItsChannels() async throws {
+        let directory = try TestAudio.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "source.caf")
+        let voice = directory.appending(path: "voice.caf")
+        let input = (1 ... 4).map { TestAudio.voice(seconds: 0.5, seed: UInt64($0)) }
+        try TestAudio.write(input, to: source)
+
+        try await SoundIsolator(model: StandInModel(gain: 0.5)).isolate(contentsOf: source, to: voice)
+
+        #expect(try await TestAudio.read(voice) == input.map { channel in channel.map { $0 * 0.5 } })
+    }
+
+    @Test func sourceIsNeverADestination() async throws {
+        let directory = try TestAudio.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "source.wav")
+        let samples = TestAudio.voice(seconds: 0.5)
+        try TestAudio.write([samples], to: source)
+
+        await #expect {
+            try await SoundIsolator(model: StandInModel()).isolate(contentsOf: source, to: source)
+        } throws: { error in
+            guard case SoundIsolationError.unsupportedConfiguration = error else { return false }
+            return true
+        }
+        #expect(try await TestAudio.read(source) == [samples])
+    }
+
     @Test func failureLeavesNoOutputFile() async throws {
         let directory = try TestAudio.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

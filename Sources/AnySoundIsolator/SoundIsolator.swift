@@ -97,6 +97,7 @@ public struct SoundIsolator: Sendable {
     /// `wav` and `caf` hold Float32 samples and so hold the output exactly;
     /// `m4a` holds AAC, which is smaller and is not exact.
     /// An existing file at a destination is replaced.
+    /// The source, the destination, and the background must be different files.
     /// If isolation fails or is cancelled, the isolator removes the files that it started.
     ///
     /// - Parameters:
@@ -113,13 +114,19 @@ public struct SoundIsolator: Sendable {
         background: URL? = nil,
         progress: Progress? = nil
     ) async throws {
+        let destinations = [destination] + (background.map { [$0] } ?? [])
+        let locations = ([source] + destinations).map(\.standardizedFileURL)
+        guard Set(locations).count == locations.count else {
+            throw SoundIsolationError.unsupportedConfiguration(
+                "The source, the destination, and the background must be different files."
+            )
+        }
         let input = try AudioFile.open(source)
         let frameCount = input.length
         let format = input.processingFormat
         progress?.totalUnitCount = frameCount
         progress?.completedUnitCount = 0
 
-        let destinations = [destination] + (background.map { [$0] } ?? [])
         do {
             let isolatedFile = try AudioFile.create(destination, format: format)
             let backgroundFile = try background.map { try AudioFile.create($0, format: format) }
