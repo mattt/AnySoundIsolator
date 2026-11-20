@@ -70,12 +70,25 @@ public struct IsolatedAudio: @unchecked Sendable {
     }
 
     /// The time range of this piece on the input's timeline.
+    ///
+    /// With a sample rate that is a whole number, the times are exact.
+    /// With another rate, each time is rounded to a nanosecond from its frame position,
+    /// so the error does not grow with the length of the recording,
+    /// and each piece starts where the piece before it ends.
     public var timeRange: CMTimeRange {
-        let timescale = CMTimeScale(buffer.format.sampleRate.rounded())
+        let sampleRate = buffer.format.sampleRate
         return CMTimeRange(
-            start: CMTime(value: framePosition, timescale: timescale),
-            duration: CMTime(value: CMTimeValue(buffer.frameLength), timescale: timescale)
+            start: Self.time(ofFrame: framePosition, sampleRate: sampleRate),
+            end: Self.time(ofFrame: framePosition + AVAudioFramePosition(buffer.frameLength), sampleRate: sampleRate)
         )
+    }
+
+    /// The time of a frame position at a sample rate.
+    private static func time(ofFrame frame: AVAudioFramePosition, sampleRate: Double) -> CMTime {
+        if sampleRate == sampleRate.rounded(), sampleRate >= 1, sampleRate <= Double(Int32.max) {
+            return CMTime(value: frame, timescale: CMTimeScale(sampleRate))
+        }
+        return CMTime(seconds: Double(frame) / sampleRate, preferredTimescale: 1_000_000_000)
     }
 
     /// Returns the sound that the isolator removed, which is the source minus the isolated sound.

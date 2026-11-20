@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 import Synchronization
 import Testing
@@ -455,6 +456,29 @@ import Testing
         }
         let nans = [Float](repeating: .nan, count: 4)
         #expect(!(TestAudio.maximumDifference(nans, signal) <= 1e-4))
+    }
+
+    /// A sample rate that is not a whole number keeps its fraction in the time range.
+    /// A rate rounded to 44,101 Hz would be wrong by 20 ms after one hour.
+    @Test func timeRangeKeepsAFractionalSampleRate() throws {
+        let sampleRate = 44_100.5
+        let buffer = try TestAudio.buffer([Array(repeating: 0, count: 1_024)], sampleRate: sampleRate)
+        let hour = AVAudioFramePosition(sampleRate * 3_600)
+        let first = IsolatedAudio(buffer: buffer, source: buffer, framePosition: hour)
+        let second = IsolatedAudio(buffer: buffer, source: buffer, framePosition: hour + 1_024)
+
+        #expect(abs(first.timeRange.start.seconds - Double(hour) / sampleRate) < 1e-8)
+        #expect(abs(first.timeRange.duration.seconds - 1_024 / sampleRate) < 1e-8)
+        #expect(first.timeRange.end == second.timeRange.start)
+
+        // A whole rate stays exact, with the rate as the time scale.
+        let whole = IsolatedAudio(
+            buffer: try TestAudio.buffer([[0, 0, 0]]),
+            source: try TestAudio.buffer([[0, 0, 0]]),
+            framePosition: 48_001
+        )
+        #expect(whole.timeRange.start == CMTime(value: 48_001, timescale: 48_000))
+        #expect(whole.timeRange.duration == CMTime(value: 3, timescale: 48_000))
     }
 
     @Test func assetRequestRunsOnlyWhenAsked() async throws {
