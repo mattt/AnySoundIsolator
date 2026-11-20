@@ -220,6 +220,9 @@ final class SoundIsolationUnit {
     ///
     /// The initializer also disposes of a unit that it could not set up in this way.
     private static func dispose(_ unit: AudioUnit) {
+        // `AudioUnit` is a pointer, which is not `Sendable`.
+        // The callers are `deinit` and a failed initializer, so no other code has the unit after this point,
+        // and the disposal queue is its only user.
         nonisolated(unsafe) let unit = unit
         counts.withLock { $0.inDisposal += 1 }
         disposal.async {
