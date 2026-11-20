@@ -37,6 +37,10 @@ run = "mise run _swift:mlx -- test --traits MLX --filter InworldParityTests"
 description = "Download Inworld's golden parity fixtures (3 MB, CC BY 4.0) into Fixtures/, which Git ignores"
 run = "scripts/fetch-fixtures.sh"
 
+[tasks."prepare:inworld"]
+description = "Download and verify the Inworld checkpoint (256 MB) in the Hugging Face cache"
+run = "mise run _swift:mlx -- run --traits MLX hush prepare --model inworld"
+
 [tasks.lint]
 description = "Check the formatting of the Swift sources"
 run = "mise run _swift -- format lint --strict --recursive ."

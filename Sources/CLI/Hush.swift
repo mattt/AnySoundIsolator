@@ -8,7 +8,7 @@ struct Hush: AsyncParsableCommand {
         commandName: "hush",
         abstract: "Isolate a sound, such as a voice, in a local audio file.",
         discussion: "SIGINT and SIGTERM cancel the operation and remove unfinished output files.",
-        subcommands: [Isolate.self, Status.self],
+        subcommands: [Isolate.self, Prepare.self, Status.self],
         defaultSubcommand: Isolate.self
     )
 }
