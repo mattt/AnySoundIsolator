@@ -6,9 +6,17 @@ import AVFoundation
 /// ``SoundIsolator/streamIsolation(contentsOf:options:)``
 /// return this type.
 /// The stream does no work until you iterate it.
-/// Each iteration reads the source from its start with a new executor,
-/// and the stream reads one piece of the source only when it needs more input,
-/// so a slow consumer slows the source and nothing accumulates.
+/// Each iteration makes a new iterator of the source and a new executor.
+/// The stream reads one piece of the source only when it needs more input,
+/// and it keeps no queue of its own.
+///
+/// What a second iteration reads, and what a slow consumer causes, depend on the source:
+///
+/// - ``AudioFileBuffers`` reads its file from the start in each iteration,
+///   and it reads a block only when the stream asks, so nothing accumulates.
+/// - An `AsyncStream` gives each element to one iteration only.
+///   It keeps every element that is not read yet, without a limit,
+///   unless you give it a buffering policy; with one, it drops audio.
 ///
 /// Across all of its elements, the stream delivers exactly as many frames as the source,
 /// in order and without gaps.

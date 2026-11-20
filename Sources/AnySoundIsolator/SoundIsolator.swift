@@ -95,8 +95,11 @@ public struct SoundIsolator: Sendable {
 
     /// Isolates the sound in an audio file and writes it to another file.
     ///
-    /// The isolator reads and writes one block at a time, so the length of the file does not
-    /// change the memory that it uses.
+    /// The isolator reads and writes one block at a time.
+    /// With a model that returns its output as the input arrives, as the models of this package do,
+    /// the length of the file does not change the memory that the isolator uses.
+    /// The isolator keeps the input frames that have no output yet,
+    /// so an engine that returns everything at the end needs memory for the whole file.
     /// The source can be any file that `AVAudioFile` reads.
     /// The destination's path extension selects its type:
     /// `wav` and `caf` hold Float32 samples and so hold the output exactly;

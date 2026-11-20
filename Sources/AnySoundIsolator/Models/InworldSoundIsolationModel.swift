@@ -113,7 +113,7 @@
             """
         }
 
-        /// The number of bytes that ``assetInstallationRequest()`` downloads
+        /// The number of bytes that the request from ``assetInstallationRequest()`` downloads
         /// when the checkpoint is not in the cache.
         public var assetByteCount: Int64 { checkpoint.size }
 
@@ -142,9 +142,10 @@
             #endif
         }
 
-        /// Returns a request that downloads and verifies the checkpoint file (256 MB),
-        /// or `nil` when the file is installed.
+        /// Returns a request for the checkpoint file (256 MB), or `nil` when the file is installed.
         ///
+        /// This method downloads nothing.
+        /// The request's ``AssetInstallationRequest/downloadAndInstall()`` downloads the file and verifies it.
         /// A file that is already in the Hugging Face cache is verified and not downloaded again.
         /// Requests that run at the same time share one download.
         ///

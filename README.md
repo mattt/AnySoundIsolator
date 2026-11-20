@@ -77,8 +77,11 @@ The source can be any file that `AVAudioFile` reads.
 The destination's extension selects its type:
 `wav` and `caf` hold Float32 samples, so they hold the output exactly,
 and `m4a` holds AAC, which is smaller and is not exact.
-The isolator reads and writes one block at a time,
-so a long recording does not need more memory than a short one.
+The isolator reads and writes one block at a time.
+With an engine that returns its output as the input arrives, as both models of this package do,
+a long recording does not need more memory than a short one.
+The isolator keeps the input frames that have no output yet,
+so an engine that returns everything at the end needs memory for the whole recording.
 
 The isolator checks both destinations before it opens a file,
 and writes each output to a temporary file in the destination's directory.
@@ -122,6 +125,12 @@ for try await audio in isolator.streamIsolation(of: buffers) {
     await player.scheduleBuffer(audio.buffer)
 }
 ```
+
+The stream reads its source only when it needs more input, and it keeps no queue of its own.
+What happens when the isolator is slower than the microphone depends on the source.
+An `AsyncStream` made as above keeps every buffer that is not read yet, without a limit.
+To limit it, give `makeStream` a buffering policy, such as `.bufferingNewest(8)`;
+the stream then drops audio, and the output has a gap in time where the audio was dropped.
 
 The package does not capture audio.
 The input can be in any PCM format, and every input of a stream must have the same format.
@@ -246,7 +255,9 @@ because the audio unit needs that much audio after a frame to isolate it.
 the offline checkpoint of [Inworld's Voice Isolator](https://github.com/inworld-ai/voice-isolator),
 in a Swift port for MLX.
 The type exists only when the package is built with the `MLX` trait.
-By ear, on one long voice recording, Inworld's model was much better than the system model.
+By ear, on one long voice recording, Inworld's Voice Isolator was much better than the system model.
+The author made that comparison before this package had the model,
+so nobody has listened to the output of this port; see [Limitations](#limitations).
 
 **Output.** The port gives the output of Inworld's reference renders.
 For Inworld's two golden fixtures, the largest error through this package's file API
@@ -255,7 +266,8 @@ Inworld's own tolerance is 1e-4.
 
 **Assets.** The model needs `denoiser.safetensors` (256,260,128 bytes), from
 [`inworld/voice-isolator`](https://huggingface.co/inworld/voice-isolator) on Hugging Face.
-`assetInstallationRequest()` downloads the file at a pinned revision,
+`assetInstallationRequest()` returns a request and downloads nothing.
+The request's `downloadAndInstall()` downloads the file at a pinned revision,
 checks its size and its SHA-256 digest, and records that it is verified.
 The file goes into the Hugging Face cache, which other tools share:
 `~/.cache/huggingface/hub`, or the directory that `HF_HUB_CACHE` or `HF_HOME` names.
@@ -360,6 +372,8 @@ The isolator does the rest:
 An executor can return any number of frames from a call, including none.
 An engine that works in windows returns a window when it is complete,
 and a hosted service can return everything from `finish()`.
+The isolator keeps each input frame until the executor returns its output,
+so the memory for a stream grows with the audio that the executor holds back.
 
 This model halves the volume instead of isolating a sound:
 
@@ -441,6 +455,7 @@ see [Inworld](#inworld).
 ## Limitations
 
 - Nobody has listened to this package's output.
+  The comparison by ear in [Inworld](#inworld) was made before this package had the model.
   The tests check length and timing with signals made in code,
   and they compare the Inworld model with Inworld's reference renders;
   they do not check sound quality.
