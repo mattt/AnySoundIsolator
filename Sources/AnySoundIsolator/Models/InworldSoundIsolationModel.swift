@@ -196,7 +196,7 @@
                         : "The Inworld checkpoint is not at \(file.path)."
                 )
             }
-            return InworldSoundIsolationExecutor(runtime: try InworldRuntime.shared(contentsOf: file))
+            return InworldSoundIsolationExecutor(runtime: try await InworldRuntime.shared(contentsOf: file))
         }
     }
 

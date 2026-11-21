@@ -3,10 +3,74 @@
     import MLX
     import Synchronization
 
+    /// The global actor of the package's MLX work: loading checkpoints and rendering windows.
+    ///
+    /// A call waits for the GPU, about 0.6 seconds for one window on an M4 Max,
+    /// so the work runs on a thread of its own and not on Swift's cooperative pool,
+    /// and callers suspend while it runs.
+    /// The thread is the same for the life of the process.
+    /// MLX keeps a compiled function's trace for each thread that calls it,
+    /// and each new thread traces the function again,
+    /// so a dispatch queue, whose worker threads come and go, would add traces without a limit.
+    /// One actor for every runtime also matches MLX:
+    /// the GPU is one device, and MLX schedules every evaluation under one process-wide lock.
+    @globalActor actor InworldDevice {
+        static let shared = InworldDevice()
+
+        /// The name of the thread that runs the work.
+        static let threadName = "AnySoundIsolator.Inworld"
+
+        private let executor = ThreadExecutor(name: threadName)
+
+        nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
+    }
+
+    /// A serial executor that runs its jobs, in order, on one thread that it starts.
+    ///
+    /// The thread waits on a condition while there are no jobs and never ends,
+    /// so the executor must live as long as the process.
+    final class ThreadExecutor: SerialExecutor, @unchecked Sendable {
+        // The condition guards `jobs`. The thread is set once in the initializer.
+        private let condition = NSCondition()
+        private var jobs: [UnownedJob] = []
+        private var thread: Thread?
+
+        init(name: String) {
+            let thread = Thread { [unowned self] in run() }
+            thread.name = name
+            thread.qualityOfService = .userInitiated
+            self.thread = thread
+            thread.start()
+        }
+
+        func enqueue(_ job: consuming ExecutorJob) {
+            let job = UnownedJob(job)
+            condition.withLock {
+                jobs.append(job)
+                condition.signal()
+            }
+        }
+
+        func checkIsolated() {
+            precondition(Thread.current === thread, "The code is not on the executor's thread.")
+        }
+
+        private func run() -> Never {
+            while true {
+                let job = condition.withLock {
+                    while jobs.isEmpty { condition.wait() }
+                    return jobs.removeFirst()
+                }
+                job.runSynchronously(on: asUnownedSerialExecutor())
+            }
+        }
+    }
+
     /// A loaded Inworld checkpoint, which renders one window at a time on the GPU.
     ///
-    /// The runtime is an actor, so the streams that share it render their windows in turn.
-    actor InworldRuntime {
+    /// The runtime is isolated to ``InworldDevice``,
+    /// so loading and rendering run on its thread, and the streams that share a runtime render in turn.
+    @InworldDevice final class InworldRuntime {
         /// The sample rate of the audio that the network reads and writes, in hertz.
         nonisolated let sampleRate: Int
         /// The number of samples in a window.
@@ -19,11 +83,20 @@
         /// which made a window about 30 percent faster in the port's measurements.
         private let forward: (MLXArray) -> MLXArray
 
+        /// Creates a runtime from a function that renders one window, for tests.
+        init(sampleRate: Int, chunk: Int, overlap: Int, forward: @escaping (MLXArray) -> MLXArray) {
+            self.sampleRate = sampleRate
+            self.chunk = chunk
+            self.overlap = overlap
+            self.forward = forward
+            BufferCacheLimit.acquire()
+        }
+
         /// Loads a checkpoint from a safetensors file whose metadata holds its configuration.
         ///
         /// - Throws: A ``SoundIsolationError`` when the file is not a checkpoint that the package runs,
         ///   or an MLX error when the file cannot be read.
-        init(contentsOf url: URL) throws {
+        convenience init(contentsOf url: URL) throws {
             let (arrays, metadata) = try loadArraysAndMetadata(url: url)
             guard let json = metadata["config"] else {
                 throw SoundIsolationError.unsupportedConfiguration(
@@ -43,10 +116,13 @@
                 eval(Array(arrays.values))
                 return network
             }
-            sampleRate = configuration.sampleRate
-            (chunk, overlap) = configuration.windowSamples
-            forward = compile(inputs: [], outputs: []) { network($0) }
-            BufferCacheLimit.acquire()
+            let (chunk, overlap) = configuration.windowSamples
+            self.init(
+                sampleRate: configuration.sampleRate,
+                chunk: chunk,
+                overlap: overlap,
+                forward: compile(inputs: [], outputs: []) { network($0) }
+            )
         }
 
         deinit {
@@ -112,26 +188,58 @@
     }
 
     extension InworldRuntime {
-        private struct Weak {
+        /// The runtime of one checkpoint file, while a stream uses it, and the load that callers share.
+        private struct Entry {
             weak var runtime: InworldRuntime?
+            let load = SharedWork<InworldRuntime>()
         }
 
-        private static let loaded = Mutex<[URL: Weak]>([:])
+        private nonisolated static let entries = Mutex<[URL: Entry]>([:])
 
         /// Returns the runtime for a checkpoint file, which the streams that are open at the same time share.
         ///
         /// The runtime stays in memory while an executor uses it.
         /// Its weights use about 260 MB.
-        static func shared(contentsOf url: URL) throws -> InworldRuntime {
-            let key = url.resolvingSymlinksInPath().standardizedFileURL
-            return try loaded.withLock { loaded in
-                if let runtime = loaded[key]?.runtime { return runtime }
+        /// Callers that ask for a file that is not loaded share one load,
+        /// and they wait for it without a lock.
+        /// Cancelling one caller ends its wait; the load stops when no caller waits for it.
+        ///
+        /// - Parameters:
+        ///   - url: The checkpoint file.
+        ///   - load: Loads the file. Tests replace it.
+        nonisolated static func shared(
+            contentsOf url: URL,
+            load: @escaping @Sendable (URL) async throws -> InworldRuntime = load(contentsOf:)
+        ) async throws -> InworldRuntime {
+            let key = key(for: url)
+            let (loaded, work) = entries.withLock { entries -> (InworldRuntime?, SharedWork<InworldRuntime>) in
+                let entry = entries[key] ?? Entry()
+                entries[key] = entry
+                return (entry.runtime, entry.load)
+            }
+            if let loaded { return loaded }
+            return try await work.value {
                 // MLX selects the file format by the path extension,
                 // which the blob that a cache entry links to does not have.
-                let runtime = try InworldRuntime(contentsOf: url)
-                loaded[key] = Weak(runtime: runtime)
+                let runtime = try await load(url)
+                // A caller that arrives after the load finds the runtime here.
+                entries.withLock { $0[key]?.runtime = runtime }
                 return runtime
             }
+        }
+
+        /// Loads a checkpoint file on ``InworldDevice``.
+        private nonisolated static func load(contentsOf url: URL) async throws -> InworldRuntime {
+            try await InworldRuntime(contentsOf: url)
+        }
+
+        /// The number of callers that wait for the load of a file, for tests.
+        nonisolated static func loadingCallerCount(contentsOf url: URL) -> Int {
+            entries.withLock { $0[key(for: url)]?.load.callerCount ?? 0 }
+        }
+
+        private nonisolated static func key(for url: URL) -> URL {
+            url.resolvingSymlinksInPath().standardizedFileURL
         }
     }
 #endif
