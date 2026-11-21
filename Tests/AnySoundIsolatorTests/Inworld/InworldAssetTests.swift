@@ -79,6 +79,43 @@
             }
         }
 
+        /// The digest runs on the store's file queue, not on the caller's actor.
+        /// A verification that is cancelled while it waits for the queue
+        /// stops before it reads a block, and it neither records nor removes the file.
+        @MainActor @Test func cancelledVerificationStopsBeforeTheNextBlock() async throws {
+            let root = try TestAudio.temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            // Three blocks of the digest.
+            let data = InworldFixture.bytes(3 << 20)
+            let server = StubModelServer(files: [InworldFixture.path: data])
+            let checkpoint = InworldFixture.checkpoint(for: data)
+            try await server.makeStore(root: root).install(checkpoint)
+            // A store with other markers sees the file as unverified.
+            let store = server.makeStore(root: root, markers: "other-markers")
+            #expect(store.status(of: checkpoint) == .missing)
+
+            store.files.queue.suspend()
+            var isSuspended = true
+            defer { if isSuspended { store.files.queue.resume() } }
+            let marks = CallMarks()
+            let verification = Task { @MainActor in
+                marks.hasStarted = true
+                defer { marks.hasReturned = true }
+                try await store.verifyAndRecord(checkpoint)
+            }
+            try await waitUntil("the verification starts") { marks.hasStarted }
+            #expect(!marks.hasReturned)
+            verification.cancel()
+            store.files.queue.resume()
+            isSuspended = false
+            await #expect(throws: CancellationError.self) { try await verification.value }
+            #expect(store.status(of: checkpoint) == .missing)
+            #expect(FileManager.default.fileExists(atPath: store.fileURL(for: checkpoint).path))
+
+            try await store.verifyAndRecord(checkpoint)
+            #expect(store.status(of: checkpoint) == .installed)
+        }
+
         @Test func replacedFileReadsAsNotInstalled() async throws {
             try await withTemporaryDirectory { root in
                 let server = StubModelServer(files: [InworldFixture.path: data])
