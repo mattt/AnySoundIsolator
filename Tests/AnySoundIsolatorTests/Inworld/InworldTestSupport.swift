@@ -95,6 +95,13 @@
         }
     }
 
+    /// The `URLProtocol` subclass that sends each request to its stub server.
+    ///
+    /// `URLProtocol` is not `Sendable`, so the conformance is unchecked.
+    /// The properties that the class reads from its superclass, `request` and `client`,
+    /// do not change after the loading system creates it.
+    /// Its one property of its own is in a mutex,
+    /// because the class does not rely on `stopLoading()` and `send` running on one thread.
     final class StubModelProtocol: URLProtocol, @unchecked Sendable {
         private let stopped = Mutex(false)
 

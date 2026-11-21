@@ -36,7 +36,8 @@ import AudioToolbox
 /// The audio unit does not always give the same samples for the same audio.
 /// On an Apple M4 Max with macOS 27, a buffer, a stream, and a file of the same audio gave the same samples.
 /// On virtual machines with macOS 27, two runs on the same audio differed in most samples,
-/// with the same length, place in time, and level.
+/// with the same length and place in time.
+/// With standard quality, their levels differed by 19 percent.
 /// Do not compare the model's output sample for sample.
 public struct SystemSoundIsolationModel: SoundIsolationModel {
     /// The voice isolation that the audio unit performs.
@@ -83,8 +84,8 @@ public struct SystemSoundIsolationModel: SoundIsolationModel {
     /// - Parameter request: The sound to isolate and the format of the input.
     /// - Throws: ``SoundIsolationError/unavailableModel(_:)`` when the system has no audio unit,
     ///   ``SoundIsolationError/unsupportedConfiguration(_:)`` when the unit refuses the format,
-    ///   or ``SoundIsolationError/backendFailure(underlying:)`` when the unit fails to start
-    ///   for a format that it accepts, after three attempts.
+    ///   or ``SoundIsolationError/backendFailure(underlying:)`` with the unit's status
+    ///   when the unit fails to start for a format that it accepts.
     public func makeExecutor(for request: SoundIsolationRequest) async throws -> any SoundIsolationExecutor {
         guard SoundIsolationUnit.isInstalled else {
             throw SoundIsolationError.unavailableModel(
@@ -101,6 +102,14 @@ public struct SystemSoundIsolationModel: SoundIsolationModel {
 }
 
 /// Runs one instance of the sound isolation audio unit for one stream.
+///
+/// A call that throws before the unit reads the input,
+/// because the input does not match the executor or the task is cancelled,
+/// leaves the executor as it was.
+/// The unit renders the input in blocks and checks for cancellation before each one.
+/// A call that is cancelled after the first block has given part of its input to the unit,
+/// which cannot be undone, so later output from the executor is not on the input's timeline.
+/// Make a new executor for the rest of the stream.
 actor SystemSoundIsolationExecutor: SoundIsolationExecutor {
     nonisolated let sampleRate: Double
     nonisolated let channelCount: Int

@@ -372,20 +372,19 @@ import Testing
         let finished = Counter()
         let isolator = SoundIsolator(model: StandInModel(latency: 100, afterFinish: { await finished.increment() }))
         let (buffers, continuation) = AsyncStream<AudioInput>.makeStream()
-        let (pieces, delivered) = AsyncStream<Int>.makeStream()
+        defer { continuation.finish() }
+        let requests = Mutex(0)
+        let source = CountedSource(base: buffers) { requests.withLock { $0 += 1 } }
         continuation.yield(AudioInput(buffer: try TestAudio.buffer([input])))
         let task = Task {
             var frames = 0
-            for try await audio in isolator.streamIsolation(of: buffers) {
+            for try await audio in isolator.streamIsolation(of: source) {
                 frames += Int(audio.buffer.frameLength)
-                delivered.yield(frames)
             }
             return frames
         }
-        // The first piece arrived, so the stream now waits for input that never comes.
-        var iterator = pieces.makeAsyncIterator()
-        _ = await iterator.next()
-        try await Task.sleep(for: .milliseconds(50))
+        // The stream took the first input and asked for a second, which never comes.
+        try await waitUntil("the stream waits for input") { requests.withLock { $0 } == 2 }
         task.cancel()
 
         await #expect(throws: CancellationError.self) {
@@ -393,7 +392,25 @@ import Testing
         }
         // The engine was not asked for the rest of its output.
         #expect(await finished.value == 0)
-        continuation.finish()
+    }
+
+    /// The single-buffer method checks for cancellation before it reads the buffer,
+    /// and again after the engine's last call, so a cancelled task never gets a result.
+    @Test func cancellationStopsOneBuffer() async throws {
+        let executors = Counter()
+        let input = input
+        let before = Task {
+            let buffer = try TestAudio.buffer([input])
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await SoundIsolator(model: StandInModel(executors: executors)).isolate(buffer)
+        }
+        await #expect(throws: CancellationError.self) { _ = try await before.value }
+        #expect(await executors.value == 0)
+
+        // The engine returns from `finish()` after the task was cancelled in it.
+        let model = StandInModel(afterFinish: { withUnsafeCurrentTask { $0?.cancel() } })
+        let during = Task { try await SoundIsolator(model: model).isolate(try TestAudio.buffer([input])) }
+        await #expect(throws: CancellationError.self) { _ = try await during.value }
     }
 
     @Test func failureEndsTheStream() async throws {
@@ -529,4 +546,27 @@ struct MalformedModel: SoundIsolationModel {
 actor Counter {
     var value = 0
     func increment() { value += 1 }
+}
+
+/// A source that reports each request for input before it waits for its base.
+struct CountedSource: AsyncSequence {
+    typealias Element = AudioInput
+    typealias Failure = Never
+
+    let base: AsyncStream<AudioInput>
+    let onRequest: @Sendable () -> Void
+
+    func makeAsyncIterator() -> Iterator {
+        Iterator(base: base.makeAsyncIterator(), onRequest: onRequest)
+    }
+
+    struct Iterator: AsyncIteratorProtocol {
+        var base: AsyncStream<AudioInput>.Iterator
+        let onRequest: @Sendable () -> Void
+
+        mutating func next() async -> AudioInput? {
+            onRequest()
+            return await base.next()
+        }
+    }
 }

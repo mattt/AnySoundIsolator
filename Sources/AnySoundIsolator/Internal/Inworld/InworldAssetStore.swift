@@ -381,10 +381,10 @@
 
         init(following source: Progress) {
             let progress = Progress(totalUnitCount: source.totalUnitCount)
-            progress.completedUnitCount = source.completedUnitCount
             self.progress = progress
+            // The first call is at registration, so no change falls between a read of the count and the observation.
             observation = Mutex(
-                source.observe(\.completedUnitCount) { source, _ in
+                source.observe(\.completedUnitCount, options: [.initial]) { source, _ in
                     progress.completedUnitCount = source.completedUnitCount
                 }
             )

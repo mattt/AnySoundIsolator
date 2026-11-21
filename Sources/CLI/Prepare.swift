@@ -20,24 +20,22 @@ struct Prepare: CancellableCommand {
             print(isolator.isAvailable ? "available" : "unavailable")
             return
         }
-        let download = Task { try await request.downloadAndInstall() }
-        let report = Task {
-            // Report only while the count changes, so a file from the cache prints nothing.
-            var reported: Int64 = 0
-            while !Task.isCancelled {
-                try await Task.sleep(for: .seconds(1))
-                let completed = request.progress.completedUnitCount
-                guard completed != reported else { continue }
-                reported = completed
-                let megabytes = (completed / 1_000_000, request.progress.totalUnitCount / 1_000_000)
-                FileHandle.standardError.write(Data("Downloaded \(megabytes.0) of \(megabytes.1) MB\n".utf8))
+        // The report is a child task, so it ends with the installation,
+        // and a cancellation of this task reaches the installation directly.
+        try await withThrowingDiscardingTaskGroup { group in
+            group.addTask {
+                // Report only while the count changes, so a file from the cache prints nothing.
+                var reported: Int64 = 0
+                while (try? await Task.sleep(for: .seconds(1))) != nil {
+                    let completed = request.progress.completedUnitCount
+                    guard completed != reported else { continue }
+                    reported = completed
+                    let megabytes = (completed / 1_000_000, request.progress.totalUnitCount / 1_000_000)
+                    FileHandle.standardError.write(Data("Downloaded \(megabytes.0) of \(megabytes.1) MB\n".utf8))
+                }
             }
-        }
-        defer { report.cancel() }
-        try await withTaskCancellationHandler {
-            try await download.value
-        } onCancel: {
-            download.cancel()
+            try await request.downloadAndInstall()
+            group.cancelAll()
         }
         print(isolator.isAvailable ? "available" : "unavailable")
     }

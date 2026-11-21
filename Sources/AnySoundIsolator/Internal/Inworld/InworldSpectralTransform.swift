@@ -59,6 +59,9 @@
         }
 
         /// Returns audio `[batch, length]` from complex spectra `[batch, frames, bins]`.
+        ///
+        /// The hop must be shorter than the window,
+        /// so that the windows' envelope is above zero at every sample that they cover.
         func inverse(_ spectrum: MLXArray, length: Int) -> MLXArray {
             let (batch, frames) = (spectrum.dim(0), spectrum.dim(1))
             let span = (nFFT + hop - 1) / hop
@@ -73,7 +76,11 @@
             let total = (frames + span - 1) * hop
             var signal = sum.reshaped(batch, total)
             let start = nFFT / 2
-            let available = min(length, total - start)
+            // As `torch.istft` does, keep the samples that the windows cover, which the envelope has,
+            // and pad the rest of the length with zeros.
+            // Only a hop larger than about half the window leaves such a rest.
+            let covered = (frames - 1) * hop + nFFT
+            let available = min(length, covered - start)
             signal =
                 signal[0..., start ..< (start + available)]
                 / envelope(frames: frames, start: start, count: available)

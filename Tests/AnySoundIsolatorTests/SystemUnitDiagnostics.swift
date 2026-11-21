@@ -23,32 +23,33 @@ import Testing
 /// The first run on such a machine showed no dependence on the block size or on the heap.
 /// It gave `output 1` for the first render and for a unit made while another unit was in use,
 /// and `output 2` for each render that came directly after another render.
-/// The rule that this report tests: a unit gives `output 2`
+/// The report was made to test a rule: that a unit gives `output 2`
 /// when the test makes it while a released unit waits for its disposal or is in it.
-/// What each group of lines shows for that rule:
+/// A CI run on 2026-11-20 rejected that rule, for both qualities.
+/// The first unit of the process gave `output 1`.
+/// Each later unit that was alone gave `output 2`,
+/// also after every disposal had ended and 0.5 s more.
+/// A unit made while one other unit was in use, after the disposals, gave `output 1`.
+/// Four units at the same time gave two of each.
+/// The cause is inside the system's audio unit and is not known.
+/// What each group of lines shows:
 ///
 /// - `first`: `output 1` by definition.
-/// - `after a render`: as in the first run, where each of these gave `output 2`.
+/// - `after a render`: a new unit after the last one was released.
 ///   The line shows whether a unit was still in disposal when the test made the next one.
-///   If it shows `0 in disposal` and `output 2`, the rule is wrong.
 /// - `directly after a render`: two renders with nothing between them; the line is for the second.
-///   On an Apple M4 Max, the second unit is made with one unit in disposal. The rule says `output 2`.
 /// - `after the disposals`: the test waits for the disposal queue and then makes the unit.
-///   The rule says `output 1`. If these lines give `output 2`,
-///   the rule is wrong, and the cause is that no other unit is in use.
 /// - `after the disposals and 0.5 s`: the same with a pause,
-///   in case the system does more work after a disposal returns. The rule says `output 1`.
-/// - `with one unit in use, directly after a render`: an idle unit stays in use,
-///   and the renders follow each other with no wait. The rule says `output 2`.
-///   If these lines give `output 1`, a unit in use is what matters, and the disposal is not.
+///   in case the system does more work after a disposal returns.
+/// - `with one unit in use, after the disposals`: an idle unit stays in use while the test makes another.
+/// - `with one unit in use, directly after a render`: the same idle unit,
+///   and renders that follow each other with no wait.
 /// - `made before a disposal, rendered in it`: the test makes the unit with no disposal pending,
 ///   then releases another unit and renders at once.
-///   `output 2` here shows that a disposal during the render matters, and not only during the making.
 /// - `at the same time, after the disposals`: four renders in four tasks, with no disposal pending at the start.
-///   The rule says `output 1` for each, unless a disposal during a render matters.
-/// - `stereo unit`: whether a unit for two channels starts, and after how many calls to `AudioUnitInitialize`.
-///   In two of four CI runs it failed with status -10875 for high quality.
-///   A count of 2 or 3 shows that another call helps.
+/// - `stereo unit`: whether a unit for two channels starts with one call to `AudioUnitInitialize`.
+///   In the CI run above, high quality failed with status -10875 for each of three units,
+///   with three calls each, and standard quality started at the first call.
 /// - `isolator` lines are the package's results for one buffer (twice), a stream, and a file.
 ///   They have the unit's delay removed, so their checksums are not those of the lines above.
 @Suite(.enabled(if: SystemSoundIsolationModel().isAvailable))
@@ -163,10 +164,8 @@ struct SystemUnitDiagnostics {
                         soundType: quality.soundType,
                         wetDryMixPercent: 100
                     )
-                    lines.append(
-                        "\(quality) stereo unit: started after \(unit.initializationAttempts) calls, "
-                            + "made with \(Self.describe(census))"
-                    )
+                    lines.append("\(quality) stereo unit: started, made with \(Self.describe(census))")
+                    withExtendedLifetime(unit) {}
                 } catch {
                     lines.append("\(quality) stereo unit: error \(error), made with \(Self.describe(census))")
                 }

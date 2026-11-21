@@ -117,7 +117,10 @@ jobs:
       - name: Remove cached build descriptions
         # Descriptions contain Metal compiler paths from the previous runner's
         # temporary mount. Keep build.db and compiled outputs for incremental builds.
-        run: rm -rf .build/out/Intermediates.noindex/XCBuildData/*.xcbuilddata
+        # The iOS build has its own build path, and so its own descriptions.
+        run: |
+          rm -rf .build/out/Intermediates.noindex/XCBuildData/*.xcbuilddata
+          rm -rf .build/ios-mlx/out/Intermediates.noindex/XCBuildData/*.xcbuilddata
 
       - name: Build with MLX
         run: mise run _swift:mlx -- build --build-tests --traits MLX

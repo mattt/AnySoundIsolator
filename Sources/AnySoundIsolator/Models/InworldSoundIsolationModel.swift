@@ -1,5 +1,6 @@
 #if MLX
     import Foundation
+    import Synchronization
 
     /// A model that isolates voice with Inworld's Voice Isolator, which runs on the GPU with MLX.
     ///
@@ -43,7 +44,7 @@
     /// because Metal compiles the network's GPU kernels or reads them from its cache for the app.
     /// With an empty cache, the first render took about 2.4 seconds longer.
     /// To keep that time away from the user's first recording,
-    /// isolate a tenth of a second of silence with ``SoundIsolator/isolate(_:options:isolation:)``
+    /// isolate a tenth of a second of silence with ``SoundIsolator/isolate(_:options:)``
     /// after the app starts.
     ///
     /// The trait supports macOS on Apple silicon.
@@ -202,9 +203,14 @@
     /// Runs the windows of one stream through a loaded checkpoint.
     ///
     /// A call suspends while the runtime renders a window, and an actor lets another call start then.
-    /// The executor makes a call wait until the calls before it return,
-    /// so overlapping calls run one at a time in the order in which they arrive,
-    /// and no window is rendered twice.
+    /// The executor makes a call wait until the call in progress returns,
+    /// so overlapping calls run one at a time, and no window is rendered twice.
+    /// Calls that wait start in the order in which they reached the executor.
+    ///
+    /// A call that throws leaves the executor as it was before the call,
+    /// so the caller can give the same input again.
+    /// A call that is cancelled while it waits leaves the queue and throws `CancellationError`.
+    /// A call that is cancelled between two windows discards the windows that it rendered and throws.
     actor InworldSoundIsolationExecutor: SoundIsolationExecutor {
         nonisolated let sampleRate: Double
         nonisolated let channelCount = 1
@@ -212,33 +218,13 @@
         nonisolated let latency = 0
         private let runtime: InworldRuntime
         private var assembler: InworldWindowAssembler
-        /// Whether a call is in progress.
-        private var isBusy = false
-        /// The calls that wait for the call in progress, in the order in which they arrived.
-        private var waiting: [CheckedContinuation<Void, Never>] = []
+        /// The queue of calls, which admits one call at a time.
+        nonisolated let admission = Admission()
 
         init(runtime: InworldRuntime) {
             self.runtime = runtime
             sampleRate = Double(runtime.sampleRate)
             assembler = InworldWindowAssembler(chunk: runtime.chunk, overlap: runtime.overlap)
-        }
-
-        /// Waits for the calls that arrived earlier.
-        private func enter() async {
-            guard isBusy else {
-                isBusy = true
-                return
-            }
-            await withCheckedContinuation { waiting.append($0) }
-        }
-
-        /// Lets the next call start.
-        private func leave() {
-            if waiting.isEmpty {
-                isBusy = false
-            } else {
-                waiting.removeFirst().resume()
-            }
         }
 
         /// Collects the input and renders each window that is complete.
@@ -248,25 +234,33 @@
                     "The Inworld executor takes one channel, and the input has \(input.channelCount)."
                 )
             }
-            await enter()
-            defer { leave() }
             let samples = input.channels[0]
             guard samples.allSatisfy(\.isFinite) else {
                 throw SoundIsolationError.invalidAudio("The audio contains NaN or infinite samples.")
             }
-            assembler.append(samples)
-            var ready: [Float] = []
-            while let window = assembler.nextWindow() {
+            try await admission.enter()
+            defer { admission.leave() }
+            // The assembler is a value, so a copy is the state to return to.
+            let before = assembler
+            do {
                 try Task.checkCancellation()
-                ready += assembler.accept(await runtime.render(window))
+                assembler.append(samples)
+                var ready: [Float] = []
+                while let window = assembler.nextWindow() {
+                    try Task.checkCancellation()
+                    ready += assembler.accept(await runtime.render(window))
+                }
+                return AudioSamples(channels: [ready])
+            } catch {
+                assembler = before
+                throw error
             }
-            return AudioSamples(channels: [ready])
         }
 
         /// Renders the window that ends at the end of the stream.
         func finish() async throws -> AudioSamples {
-            await enter()
-            defer { leave() }
+            try await admission.enter()
+            defer { admission.leave() }
             try Task.checkCancellation()
             var voice: [Float]?
             if let window = assembler.lastWindow() {
@@ -275,6 +269,67 @@
             let ready = assembler.finish(voice)
             await runtime.releaseBuffers()
             return AudioSamples(channels: [ready])
+        }
+
+        /// A queue that admits one call at a time, in the order in which the calls arrive.
+        ///
+        /// A mutex guards the queue, so that a cancellation handler can remove a call from it
+        /// without the actor.
+        /// Each continuation leaves the queue under the mutex, so it has one owner,
+        /// and it is resumed after the mutex is released.
+        final class Admission: Sendable {
+            private typealias Waiter = CheckedContinuation<Void, any Error>
+
+            private struct State {
+                var isBusy = false
+                var waiting: [(id: UUID, waiter: Waiter)] = []
+            }
+
+            private let state = Mutex(State())
+
+            /// The number of calls that wait for the call in progress.
+            var waitingCount: Int { state.withLock { $0.waiting.count } }
+
+            /// Waits until the calls that arrived earlier have left.
+            ///
+            /// - Throws: `CancellationError` when the task is cancelled before the call is admitted.
+            func enter() async throws {
+                let id = UUID()
+                try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { (waiter: Waiter) in
+                        let admitted: Result<Void, any Error>? = state.withLock { state in
+                            // The handler sets the flag before it runs,
+                            // so a call that it did not find in the queue sees the flag.
+                            if Task.isCancelled { return .failure(CancellationError()) }
+                            guard state.isBusy else {
+                                state.isBusy = true
+                                return .success(())
+                            }
+                            state.waiting.append((id, waiter))
+                            return nil
+                        }
+                        if let admitted { waiter.resume(with: admitted) }
+                    }
+                } onCancel: {
+                    let waiter = state.withLock { state -> Waiter? in
+                        guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return nil }
+                        return state.waiting.remove(at: index).waiter
+                    }
+                    waiter?.resume(throwing: CancellationError())
+                }
+            }
+
+            /// Admits the next call, or marks the queue as free.
+            func leave() {
+                let next = state.withLock { state -> Waiter? in
+                    guard !state.waiting.isEmpty else {
+                        state.isBusy = false
+                        return nil
+                    }
+                    return state.waiting.removeFirst().waiter
+                }
+                next?.resume()
+            }
         }
     }
 #endif

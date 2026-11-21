@@ -13,7 +13,7 @@ try await isolator.isolate(contentsOf: recording, to: voice)
 ```
 
 Use ``SoundIsolator/isolate(contentsOf:to:background:options:progress:)`` for files,
-``SoundIsolator/isolate(_:options:isolation:)`` for one buffer,
+``SoundIsolator/isolate(_:options:)`` for one buffer,
 or ``SoundIsolator/streamIsolation(of:options:)`` for a sequence of buffers.
 For results as a file is processed, use ``SoundIsolator/streamIsolation(contentsOf:options:)``.
 

@@ -36,10 +36,14 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
     }
 
     /// Reads the file one block at a time.
+    ///
+    /// After the end of the file or an error, the iterator closes the file,
+    /// and each later call to ``next(isolation:)`` returns `nil`.
     public struct AsyncIterator: AsyncIteratorProtocol {
         let url: URL
         let blockSize: AVAudioFrameCount
         private var file: AVAudioFile?
+        private var isFinished = false
 
         init(url: URL, blockSize: AVAudioFrameCount) {
             self.url = url
@@ -49,12 +53,31 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
         /// Reads the next block of the file.
         ///
         /// - Parameter actor: The actor that the caller runs on.
-        /// - Returns: The next block, or `nil` at the end of the file.
+        /// - Returns: The next block, or `nil` at the end of the file and after an error.
         /// - Throws: ``SoundIsolationError/invalidAudio(_:)`` when the file cannot be read
         ///   or ends before the number of frames that it states, or `CancellationError`.
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> AudioInput? {
+            guard !isFinished else { return nil }
+            do {
+                let input = try read()
+                if input == nil { finish() }
+                return input
+            } catch {
+                finish()
+                throw error
+            }
+        }
+
+        /// Ends the iteration and closes the file.
+        private mutating func finish() {
+            isFinished = true
+            file = nil
+        }
+
+        /// Reads the next block, or returns `nil` at the end of the file.
+        private mutating func read() throws -> AudioInput? {
             try Task.checkCancellation()
             let file = try self.file ?? AudioFile.open(url)
             self.file = file
@@ -124,12 +147,43 @@ enum AudioFile {
     ///
     /// Two different paths name one file when one is a hard link to the other,
     /// or when the file system ignores a difference between them, such as case.
+    /// The second rule also applies when neither file exists yet:
+    /// `Voice.wav` and `voice.wav` in one directory are one file on a volume that ignores case,
+    /// so the second move would replace the first.
     static func isSameFile(_ first: URL, _ second: URL) -> Bool {
         if first == second || first.path == second.path { return true }
-        var firstStatus = stat()
-        var secondStatus = stat()
-        guard stat(first.path, &firstStatus) == 0, stat(second.path, &secondStatus) == 0 else { return false }
-        return firstStatus.st_dev == secondStatus.st_dev && firstStatus.st_ino == secondStatus.st_ino
+        if let firstIdentity = identity(of: first), let secondIdentity = identity(of: second) {
+            return firstIdentity == secondIdentity
+        }
+        // A file is absent, so compare the directories and the names.
+        let directory = first.deletingLastPathComponent()
+        guard let directoryIdentity = identity(of: directory),
+            directoryIdentity == identity(of: second.deletingLastPathComponent())
+        else { return false }
+        // Swift compares strings by canonical equivalence, as APFS and HFS+ compare names.
+        // On a volume that compares the bytes of names, this refuses two names that would be two files.
+        let (firstName, secondName) = (first.lastPathComponent, second.lastPathComponent)
+        if firstName == secondName { return true }
+        // When the volume does not say, the check assumes that it ignores case, as macOS volumes do by default.
+        let isCaseSensitive =
+            (try? directory.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
+            .volumeSupportsCaseSensitiveNames ?? false
+        return !isCaseSensitive
+            && firstName.folding(options: .caseInsensitive, locale: nil)
+                == secondName.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    /// The device and the inode of a file.
+    private struct Identity: Equatable {
+        let device: dev_t
+        let inode: ino_t
+    }
+
+    /// The identity of a file, or `nil` when the file does not exist.
+    private static func identity(of url: URL) -> Identity? {
+        var status = stat()
+        guard stat(url.path, &status) == 0 else { return nil }
+        return Identity(device: status.st_dev, inode: status.st_ino)
     }
 
     /// Creates a file whose type comes from the path extension of its location.

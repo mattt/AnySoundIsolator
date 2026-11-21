@@ -20,6 +20,20 @@
             #expect(abs(restored - signal).max().item(Float.self) < 1e-5)
         }
 
+        /// With a hop larger than half the window, the windows end before the length that the caller asks for.
+        /// The inverse keeps the samples that they cover and pads the rest with zeros, as `torch.istft` does.
+        /// Here the windows cover 11 of 13 samples.
+        @Test func inverseWithALongHopPadsTheSamplesThatNoWindowCovers() {
+            let transform = InworldSpectralTransform(nFFT: 8, hop: 7)
+            let signal = MLXRandom.normal([1, 13]) * 0.1
+            let restored = transform.inverse(transform.forward(signal), length: 13)
+            #expect(restored.shape == [1, 13])
+            let values = restored.asArray(Float.self)
+            let expected = signal.asArray(Float.self)
+            #expect(zip(values.prefix(11), expected.prefix(11)).allSatisfy { abs($0 - $1) < 1e-5 })
+            #expect(values.suffix(2) == [0, 0])
+        }
+
         /// The Metal kernel gives the result of the same recurrence written in Swift.
         @Test func scanKernelMatchesTheRecurrence() {
             let (rows, frames, channels, states) = (3, 50, 8, 16)
@@ -140,8 +154,9 @@
             }
         }
 
-        /// A call suspends during a render. A second call that starts then waits for the first,
+        /// Two calls that wait at the same time run one at a time,
         /// so the two together give the output of two calls in a row.
+        /// Each call suspends during its render, so without the queue the second could start then.
         @Test func overlappingCallsRunOneAtATime() async throws {
             try await withTemporaryDirectory { directory in
                 let checkpoint = directory.appending(path: "small.safetensors")
@@ -157,15 +172,55 @@
                 let expectedRest = try await inOrder.finish().channels[0]
                 #expect(expected.count + expectedRest.count == 14_000)
 
-                for _ in 0 ..< 5 {
-                    let executor = try await model.makeExecutor(for: request)
-                    async let first = executor.process(piece)
-                    async let second = executor.process(piece)
-                    let (one, two) = try await (first.channels[0], second.channels[0])
-                    // The pieces are equal, so either call can be the first to run.
-                    #expect(one + two == expected || two + one == expected)
-                    #expect(try await executor.finish().channels[0] == expectedRest)
-                }
+                let executor = try #require(
+                    try await model.makeExecutor(for: request) as? InworldSoundIsolationExecutor
+                )
+                // The test holds the queue until both calls wait, so the calls overlap.
+                try await executor.admission.enter()
+                var isHeld = true
+                defer { if isHeld { executor.admission.leave() } }
+                async let first = executor.process(piece)
+                async let second = executor.process(piece)
+                try await waitUntil("both calls wait") { executor.admission.waitingCount == 2 }
+                executor.admission.leave()
+                isHeld = false
+                let (one, two) = try await (first.channels[0], second.channels[0])
+                // The pieces are equal, so either call can be the first to run.
+                #expect(one + two == expected || two + one == expected)
+                #expect(try await executor.finish().channels[0] == expectedRest)
+            }
+        }
+
+        /// A call that is cancelled while it waits for another leaves the queue and takes none of its input.
+        @Test func callCancelledWhileItWaitsTakesNoInput() async throws {
+            try await withTemporaryDirectory { directory in
+                let checkpoint = directory.appending(path: "small.safetensors")
+                try InworldFixture.writeSmallCheckpoint(to: checkpoint)
+                let model = InworldSoundIsolationModel(assets: .file(checkpoint))
+                let request = SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+                let piece = AudioSamples(channels: [Array(TestAudio.voice(seconds: 0.26).prefix(7_000))])
+
+                let alone = try await model.makeExecutor(for: request)
+                let expected = try await alone.process(piece).channels[0]
+                let expectedRest = try await alone.finish().channels[0]
+
+                let executor = try #require(
+                    try await model.makeExecutor(for: request) as? InworldSoundIsolationExecutor
+                )
+                // The test holds the queue, so the call waits. A failure below still releases it.
+                try await executor.admission.enter()
+                var isHeld = true
+                defer { if isHeld { executor.admission.leave() } }
+                let waiting = Task { try await executor.process(piece) }
+                try await waitUntil("the call waits") { executor.admission.waitingCount == 1 }
+                waiting.cancel()
+                await #expect(throws: CancellationError.self) { _ = try await waiting.value }
+                #expect(executor.admission.waitingCount == 0)
+                executor.admission.leave()
+                isHeld = false
+
+                #expect(try await executor.process(piece).channels[0] == expected)
+                #expect(try await executor.finish().channels[0] == expectedRest)
             }
         }
 

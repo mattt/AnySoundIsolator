@@ -9,7 +9,7 @@ import Testing
 /// A test that compares two renders of the same samples uses `TestAudio.expectSameRender`.
 /// It requires equal samples, except on a machine where `Machine.systemUnitCanDiffer` is true:
 /// there, a difference in the samples is a known issue with an unknown cause,
-/// and the test still requires the same length, place in time, and level.
+/// and the test still requires the same length and place in time, and a level within a factor of two.
 @Suite(.enabled(if: SystemSoundIsolationModel().isAvailable))
 struct SystemSoundIsolationModelTests {
     typealias Quality = SystemSoundIsolationModel.Quality
@@ -87,30 +87,27 @@ struct SystemSoundIsolationModelTests {
         }
     }
 
-    /// A unit that fails to start is tried three times, and a refused format is an error at once.
-    @Test func unitThatFailsToStartIsTriedAgain() throws {
+    /// A unit that fails to start and a refused format are two different errors after one call,
+    /// and the first keeps the unit's status.
+    @Test func unitThatFailsToStartIsAnErrorAtOnce() throws {
         var calls = 0
-        let attempts = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
-            calls += 1
-            return calls < 3 ? kAudioUnitErr_FailedInitialization : noErr
-        }
-        #expect(attempts == 3)
-
-        calls = 0
         #expect {
-            _ = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
                 calls += 1
                 return kAudioUnitErr_FailedInitialization
             }
         } throws: { error in
             guard case SoundIsolationError.backendFailure(let underlying) = error else { return false }
-            return (underlying as NSError).code == Int(kAudioUnitErr_FailedInitialization)
+            let status = underlying as NSError
+            return status.domain == NSOSStatusErrorDomain
+                && status.code == Int(kAudioUnitErr_FailedInitialization)
+                && status.localizedDescription.contains("status \(kAudioUnitErr_FailedInitialization)")
         }
-        #expect(calls == 3)
+        #expect(calls == 1)
 
         calls = 0
         #expect {
-            _ = try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
                 calls += 1
                 return kAudioUnitErr_FormatNotSupported
             }
@@ -119,6 +116,61 @@ struct SystemSoundIsolationModelTests {
             return true
         }
         #expect(calls == 1)
+
+        calls = 0
+        try SoundIsolationUnit.start(sampleRate: 48_000, channelCount: 2) {
+            calls += 1
+            return noErr
+        }
+        #expect(calls == 1)
+    }
+
+    /// The executor is public, so a caller can give it audio that the isolator would never give.
+    /// The unit reads every channel by the length of the first, so the executor checks the input first.
+    @Test func executorRefusesAudioThatDoesNotMatchIt() async throws {
+        let model = SystemSoundIsolationModel(quality: .standard)
+        let executor = try await model.makeExecutor(
+            for: SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+        )
+        let voice = TestAudio.voice(seconds: 0.1)
+        await #expect {
+            _ = try await executor.process(AudioSamples(channels: [voice, voice]))
+        } throws: { error in
+            guard case SoundIsolationError.invalidAudio = error else { return false }
+            return true
+        }
+
+        // `channels` can change after the initializer checked the lengths.
+        var unequal = AudioSamples(channels: [voice])
+        unequal.channels.append(Array(voice.prefix(10)))
+        let stereo = try await model.makeExecutor(
+            for: SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 2)
+        )
+        await #expect {
+            _ = try await stereo.process(unequal)
+        } throws: { error in
+            guard case SoundIsolationError.invalidAudio = error else { return false }
+            return true
+        }
+        // A refused input does not reach the unit, so the executor still works.
+        let output = try await stereo.process(AudioSamples(channels: [voice, voice]))
+        #expect(output.channelCount == 2)
+        #expect(output.frameCount == voice.count)
+    }
+
+    /// The unit checks for cancellation before each block, so a cancelled call does not reach the unit,
+    /// and the executor still works.
+    @Test func cancelledCallDoesNotReachTheUnit() async throws {
+        let executor = try await SystemSoundIsolationModel(quality: .standard).makeExecutor(
+            for: SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+        )
+        let input = AudioSamples(channels: [TestAudio.voice(seconds: 0.5)])
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await executor.process(input)
+        }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(try await executor.process(input).frameCount == input.frameCount)
     }
 
     @Test func threeChannelsAreDownmixedByDefault() async throws {

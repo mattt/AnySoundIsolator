@@ -111,8 +111,8 @@ enum TestAudio {
     /// Runs a test of the system's audio unit in which the unit can fail to start.
     ///
     /// On virtual machines with macOS 27, `AudioUnitInitialize` failed with status -10875
-    /// (`kAudioUnitErr_FailedInitialization`) for two channels at 48 kHz with high quality, in two of four CI runs.
-    /// The package tries three times and then throws ``SoundIsolationError/backendFailure(underlying:)``.
+    /// (`kAudioUnitErr_FailedInitialization`) for two channels at 48 kHz with high quality.
+    /// The package makes one call and then throws ``SoundIsolationError/backendFailure(underlying:)``.
     /// Where ``Machine/systemUnitCanDiffer`` is true, that error is a known issue that does not occur in every run.
     /// The cause is unknown. Any other error, and that error on any other machine, fails the test.
     static func withKnownStartFailure(
@@ -300,7 +300,7 @@ enum Machine {
     ///
     /// The condition is a virtual machine with macOS 27 or later, which is where the difference occurred:
     /// in three CI runs, a different test of exact equality failed each time on the macOS 27 runners,
-    /// with most frames different and the same level.
+    /// with most frames different.
     /// The same tests passed in each run on the virtual machines with macOS 26,
     /// and they pass on an Apple M4 Max with macOS 27 that is not virtual.
     /// The cause is unknown.
@@ -486,4 +486,28 @@ actor StandInExecutor: SoundIsolationExecutor {
         rest.resize(to: max(0, rest.frameCount + extraFrames))
         return rest
     }
+}
+
+/// Waits until a condition is true, for a state that a test cannot observe through a signal,
+/// such as a call that waits in a queue.
+///
+/// The wait has a limit, so a state that never comes fails the test instead of stopping the run.
+///
+/// - Throws: ``WaitTimedOut`` when the condition is still false after the limit.
+func waitUntil(
+    _ description: String,
+    limit: Duration = .seconds(10),
+    _ condition: () async -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + limit
+    while await !condition() {
+        guard ContinuousClock.now < deadline else { throw WaitTimedOut(description: description) }
+        // The poll interval is not a stand-in for the state: the loop ends when the state is there.
+        try await Task.sleep(for: .milliseconds(1))
+    }
+}
+
+/// The error of a wait for a state that did not come.
+struct WaitTimedOut: Error, CustomStringConvertible {
+    let description: String
 }
