@@ -236,6 +236,7 @@ Samples can differ across runs.
 On macOS 27 virtual machines, two runs differed in most samples
 but kept the same length and timing.
 With standard quality, their levels differed by 19 percent.
+There, the audio unit also failed to start in some runs, with status -10875 at high quality.
 
 #### Performance
 
