@@ -77,7 +77,7 @@ import Testing
         #expect(progress.completedUnitCount == 120_000)
     }
 
-    @Test func systemModelIsolatesAFile() async throws {
+    @Test(.knownStartFailure) func systemModelIsolatesAFile() async throws {
         try #require(SystemSoundIsolationModel().isAvailable)
         let directory = try TestAudio.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

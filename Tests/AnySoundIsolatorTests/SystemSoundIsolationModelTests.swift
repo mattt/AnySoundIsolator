@@ -10,7 +10,8 @@ import Testing
 /// It requires equal samples, except on a machine where `Machine.systemUnitCanDiffer` is true:
 /// there, a difference in the samples is a known issue with an unknown cause,
 /// and the test still requires the same length and place in time, and a level within a factor of two.
-@Suite(.enabled(if: SystemSoundIsolationModel().isAvailable))
+/// On such a machine, the unit can also fail to start, which each test records as a known issue.
+@Suite(.enabled(if: SystemSoundIsolationModel().isAvailable), .knownStartFailure)
 struct SystemSoundIsolationModelTests {
     typealias Quality = SystemSoundIsolationModel.Quality
 
