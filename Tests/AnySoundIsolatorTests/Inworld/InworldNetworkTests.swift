@@ -7,6 +7,24 @@
 
     @testable import AnySoundIsolator
 
+    /// The names of the threads that released a ``ReleaseMark``.
+    private final class ThreadLog: Sendable {
+        let names = Mutex<[String?]>([])
+    }
+
+    /// An object that records the thread that releases it.
+    private final class ReleaseMark: Sendable {
+        private let log: ThreadLog
+
+        init(log: ThreadLog) {
+            self.log = log
+        }
+
+        deinit {
+            log.names.withLock { $0.append(Thread.current.name) }
+        }
+    }
+
     /// Tests that compute on the GPU with MLX. They need no download.
     /// Set `ENABLE_MLX_TESTS=1` to run them, as `mise run test:mlx` does.
     @Suite(.enabled(if: shouldRunMLXTests), .serialized) struct InworldNetworkTests {
@@ -247,6 +265,44 @@
             // A caller after the load gets the runtime that is loaded.
             #expect(try await InworldRuntime.shared(contentsOf: url, load: load) === one)
             #expect(loads.withLock { $0 } == 1)
+        }
+
+        /// A file that replaces another at the same location gets a runtime of its own,
+        /// while a stream still uses the runtime of the first file.
+        @Test func replacedCheckpointFileGetsItsOwnRuntime() async throws {
+            try await withTemporaryDirectory { directory in
+                let url = directory.appending(path: "weights.safetensors")
+                try Data([1]).write(to: url)
+                let loads = Mutex(0)
+                let load: @Sendable (URL) async throws -> InworldRuntime = { _ in
+                    loads.withLock { $0 += 1 }
+                    return await InworldRuntime(sampleRate: 48_000, chunk: 8, overlap: 2) { $0 }
+                }
+                let first = try await InworldRuntime.shared(contentsOf: url, load: load)
+                #expect(try await InworldRuntime.shared(contentsOf: url, load: load) === first)
+                #expect(loads.withLock { $0 } == 1)
+
+                // Another file at the same location, as an atomic write makes it.
+                try Data([1, 2]).write(to: url, options: .atomic)
+                let second = try await InworldRuntime.shared(contentsOf: url, load: load)
+                #expect(second !== first)
+                #expect(loads.withLock { $0 } == 2)
+            }
+        }
+
+        /// The last owner of a runtime can be on any thread.
+        /// The runtime, with its compiled function, is released on the thread of `InworldDevice`.
+        @Test func runtimeIsReleasedOnTheDeviceThread() async throws {
+            let log = ThreadLog()
+            do {
+                let mark = ReleaseMark(log: log)
+                let runtime = await InworldRuntime(sampleRate: 48_000, chunk: 4, overlap: 1) { samples in
+                    withExtendedLifetime(mark) { samples }
+                }
+                #expect(runtime.chunk == 4)
+            }
+            try await waitUntil("the runtime is released") { log.names.withLock { !$0.isEmpty } }
+            #expect(log.names.withLock { $0 } == [InworldDevice.threadName])
         }
 
         /// The runtime renders on the thread of `InworldDevice`,
