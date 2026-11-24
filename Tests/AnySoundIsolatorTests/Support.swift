@@ -493,8 +493,10 @@ actor StandInExecutor: SoundIsolationExecutor {
 ///
 /// The wait has a limit, so a state that never comes fails the test instead of stopping the run.
 ///
+/// The wait runs on the caller's actor, so a test on the main actor can wait for state there.
+///
 /// - Throws: ``WaitTimedOut`` when the condition is still false after the limit.
-func waitUntil(
+nonisolated(nonsending) func waitUntil(
     _ description: String,
     limit: Duration = .seconds(10),
     _ condition: () async -> Bool
@@ -510,4 +512,14 @@ func waitUntil(
 /// The error of a wait for a state that did not come.
 struct WaitTimedOut: Error, CustomStringConvertible {
     let description: String
+}
+
+/// Marks that a test sets on the main actor before and after a call.
+///
+/// When the test sees ``hasStarted`` and not ``hasReturned``,
+/// the call has suspended: the main actor runs one job at a time,
+/// so a call that did its work there would have returned in the same job.
+@MainActor final class CallMarks {
+    var hasStarted = false
+    var hasReturned = false
 }

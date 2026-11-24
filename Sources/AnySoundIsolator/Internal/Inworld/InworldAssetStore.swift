@@ -143,6 +143,8 @@
         let markerDirectory: URL
         private let client: HubClient
         private let installations = Mutex<[String: Installation]>([:])
+        /// Runs verification, which blocks its thread.
+        let files = BlockingFileWork(label: "AnySoundIsolator.InworldAssetStore")
 
         /// Creates a store without file system or network access.
         ///
@@ -242,18 +244,33 @@
                     throw CancellationError()
                 }
                 try Task.checkCancellation()
+                try await verifyAndRecord(checkpoint)
+                progress.completedUnitCount = checkpoint.size
+                return file
+            }
+        }
+
+        /// Verifies the file in the cache and writes its verification marker,
+        /// on the store's file queue.
+        ///
+        /// The digest reads the whole file, which takes about 90 ms on an M4 Max when the file is in memory,
+        /// so it runs on a dispatch queue and not on the caller's actor or Swift's cooperative pool.
+        /// It runs in the caller's task and checks for cancellation before each block.
+        ///
+        /// - Throws: ``SoundIsolationError/assetVerificationFailed(_:)``, a file system error,
+        ///   or `CancellationError`.
+        func verifyAndRecord(_ checkpoint: InworldCheckpoint) async throws {
+            try await files.run { [self] in
                 // Verify the pinned location, not the returned one,
                 // so that a response for another commit cannot satisfy the checkpoint.
                 let identity = try verify(checkpoint)
                 try FileManager.default.createDirectory(at: markerDirectory, withIntermediateDirectories: true)
                 let record = VerificationMarker(
                     checkpoint: checkpoint,
-                    file: file.standardizedFileURL.path,
+                    file: fileURL(for: checkpoint).standardizedFileURL.path,
                     identity: identity
                 )
-                try JSONEncoder().encode(record).write(to: marker, options: .atomic)
-                progress.completedUnitCount = checkpoint.size
-                return file
+                try JSONEncoder().encode(record).write(to: markerURL(for: checkpoint), options: .atomic)
             }
         }
 
@@ -368,6 +385,27 @@
                 return true
             }) {}
             return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        }
+    }
+
+    /// Runs file work that blocks its thread on a serial dispatch queue.
+    ///
+    /// The actor's executor is the queue, so the work holds neither the caller's actor
+    /// nor a thread of Swift's cooperative pool.
+    /// The work runs in the caller's task, so it sees the task's cancellation,
+    /// and no continuation is left waiting when the task is cancelled.
+    actor BlockingFileWork {
+        /// The queue that runs the work. Tests suspend it.
+        nonisolated let queue: DispatchSerialQueue
+
+        nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
+
+        init(label: String) {
+            queue = DispatchSerialQueue(label: label)
+        }
+
+        func run<T: Sendable>(_ work: @Sendable () throws -> T) throws -> T {
+            try work()
         }
     }
 

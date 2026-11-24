@@ -2,6 +2,7 @@
     import AVFoundation
     import Foundation
     import MLX
+    import Synchronization
     import Testing
 
     @testable import AnySoundIsolator
@@ -89,7 +90,7 @@
 
                 // 2.6 windows at 48 kHz, so the last window is off the hop.
                 let samples = TestAudio.voice(seconds: 0.26)
-                let runtime = try InworldRuntime.shared(contentsOf: checkpoint)
+                let runtime = try await InworldRuntime.shared(contentsOf: checkpoint)
                 #expect(runtime.chunk == 4_800 && runtime.overlap == 1_200)
 
                 // The offline render, with the length known, as upstream writes it.
@@ -222,6 +223,43 @@
                 #expect(try await executor.process(piece).channels[0] == expected)
                 #expect(try await executor.finish().channels[0] == expectedRest)
             }
+        }
+
+        /// Callers that ask for one checkpoint at the same time share one load,
+        /// and they wait for it without a lock.
+        @Test func callersForOneCheckpointShareOneLoad() async throws {
+            let url = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "\(UUID()).safetensors")
+            let gate = SharedWorkTests.Gate()
+            let loads = Mutex(0)
+            let load: @Sendable (URL) async throws -> InworldRuntime = { _ in
+                loads.withLock { $0 += 1 }
+                await gate.wait()
+                return await InworldRuntime(sampleRate: 48_000, chunk: 8, overlap: 2) { $0 }
+            }
+            // A failure below still lets the load end.
+            defer { gate.open() }
+            let first = Task { try await InworldRuntime.shared(contentsOf: url, load: load) }
+            let second = Task { try await InworldRuntime.shared(contentsOf: url, load: load) }
+            try await waitUntil("both callers wait") { InworldRuntime.loadingCallerCount(contentsOf: url) == 2 }
+            gate.open()
+            let (one, two) = try await (first.value, second.value)
+            #expect(one === two)
+            // A caller after the load gets the runtime that is loaded.
+            #expect(try await InworldRuntime.shared(contentsOf: url, load: load) === one)
+            #expect(loads.withLock { $0 } == 1)
+        }
+
+        /// The runtime renders on the thread of `InworldDevice`,
+        /// not on the caller's thread or a thread of the cooperative pool.
+        @Test func renderRunsOnTheDeviceThread() async throws {
+            let threads = Mutex<[String?]>([])
+            let runtime = await InworldRuntime(sampleRate: 48_000, chunk: 4, overlap: 1) { samples in
+                threads.withLock { $0.append(Thread.current.name) }
+                return samples * 2
+            }
+            #expect(await runtime.render([1, 2, 3, 4]) == [2, 4, 6, 8])
+            #expect(await Task.detached { await runtime.render([1, 2, 3, 4]) }.value == [2, 4, 6, 8])
+            #expect(threads.withLock { $0 } == [InworldDevice.threadName, InworldDevice.threadName])
         }
 
         @Test func audioThatIsNotFiniteIsRefused() async throws {

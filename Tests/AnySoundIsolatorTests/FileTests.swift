@@ -491,4 +491,36 @@ import Testing
         }.value
         #expect(afterCancellation)
     }
+
+    /// A consumer on the main actor does not open or read the file there:
+    /// the read waits for the iterator's queue, and the main actor is free in the meantime.
+    @MainActor @Test func fileIteratorReadsOffTheConsumersActor() async throws {
+        let (directory, source, _) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let queue = DispatchSerialQueue(label: "AnySoundIsolatorTests.file")
+        queue.suspend()
+        var isSuspended = true
+        defer { if isSuspended { queue.resume() } }
+
+        let marks = CallMarks()
+        let consumer = Task { @MainActor in
+            var iterator = AudioFileBuffers.AsyncIterator(url: source, blockSize: 40_000, queue: queue)
+            marks.hasStarted = true
+            defer { marks.hasReturned = true }
+            var frames: [AVAudioFrameCount] = []
+            while let input = try await iterator.next() {
+                frames.append(input.buffer.frameLength)
+            }
+            return frames
+        }
+        try await waitUntil("the consumer starts") { marks.hasStarted }
+        #expect(!marks.hasReturned)
+        queue.resume()
+        isSuspended = false
+        // A read can return fewer frames than the block size, so check the blocks and the total.
+        let frames = try await consumer.value
+        #expect(frames.count == 3)
+        #expect(frames.allSatisfy { $0 <= 40_000 })
+        #expect(frames.reduce(0, +) == 96_000)
+    }
 }

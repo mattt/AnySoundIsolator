@@ -37,17 +37,26 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
 
     /// Reads the file one block at a time.
     ///
+    /// The iterator opens, reads, and decodes the file on a serial dispatch queue of its own,
+    /// so a consumer on the main actor or another actor does not wait for the file there,
+    /// and the work holds no thread of Swift's cooperative pool.
+    /// Each call to ``next(isolation:)`` reads one block, and the iterator reads no block before a call.
     /// After the end of the file or an error, the iterator closes the file,
     /// and each later call to ``next(isolation:)`` returns `nil`.
     public struct AsyncIterator: AsyncIteratorProtocol {
         let url: URL
         let blockSize: AVAudioFrameCount
-        private var file: AVAudioFile?
+        private let reader: AudioFileReader
         private var isFinished = false
 
-        init(url: URL, blockSize: AVAudioFrameCount) {
+        init(
+            url: URL,
+            blockSize: AVAudioFrameCount,
+            queue: DispatchSerialQueue = DispatchSerialQueue(label: "AnySoundIsolator.AudioFileBuffers")
+        ) {
             self.url = url
             self.blockSize = blockSize
+            self.reader = AudioFileReader(url: url, blockSize: blockSize, queue: queue)
         }
 
         /// Reads the next block of the file.
@@ -60,49 +69,81 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> AudioInput? {
             guard !isFinished else { return nil }
+            let input: AudioInput?
             do {
-                let input = try read()
-                if input == nil { finish() }
-                return input
+                input = try await reader.read()
             } catch {
-                finish()
+                isFinished = true
+                await reader.close()
                 throw error
             }
+            if input == nil {
+                isFinished = true
+                await reader.close()
+            }
+            return input
         }
+    }
+}
 
-        /// Ends the iteration and closes the file.
-        private mutating func finish() {
-            isFinished = true
-            file = nil
-        }
+/// The open file of one iterator of ``AudioFileBuffers``.
+///
+/// `AVAudioFile` is not `Sendable`.
+/// The actor owns the file, and only its methods touch it,
+/// so one thread at a time uses the file, and the file never crosses to another actor.
+/// What leaves the actor is an ``AudioInput``, which owns a copy of the block.
+///
+/// The actor's executor is a serial dispatch queue,
+/// because the open, the read, and the decoding block their thread.
+/// The methods run in the caller's task, so they see its cancellation.
+actor AudioFileReader {
+    private let url: URL
+    private let blockSize: AVAudioFrameCount
+    private let queue: DispatchSerialQueue
+    private var file: AVAudioFile?
 
-        /// Reads the next block, or returns `nil` at the end of the file.
-        private mutating func read() throws -> AudioInput? {
-            try Task.checkCancellation()
-            let file = try self.file ?? AudioFile.open(url)
-            self.file = file
-            // One read can return fewer frames than the block size before the end of the file,
-            // so the end is the file's length, not a short read.
-            guard file.framePosition < file.length else { return nil }
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: blockSize) else {
-                throw SoundIsolationError.invalidAudio("An audio buffer could not be allocated.")
-            }
-            do {
-                try file.read(into: buffer, frameCount: blockSize)
-            } catch {
-                throw SoundIsolationError.invalidAudio(
-                    "\(url.lastPathComponent) could not be read: \(error.localizedDescription)"
-                )
-            }
-            // The file states more frames than this read reached.
-            // To end the stream here would report a short output as a success.
-            guard buffer.frameLength > 0 else {
-                throw SoundIsolationError.invalidAudio(
-                    "\(url.lastPathComponent) ended after \(file.framePosition) of its \(file.length) frames."
-                )
-            }
-            return AudioInput(owning: buffer)
+    nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
+
+    init(url: URL, blockSize: AVAudioFrameCount, queue: DispatchSerialQueue) {
+        self.url = url
+        self.blockSize = blockSize
+        self.queue = queue
+    }
+
+    /// Reads the next block, or returns `nil` at the end of the file.
+    ///
+    /// The first call opens the file.
+    func read() throws -> AudioInput? {
+        try Task.checkCancellation()
+        let file = try self.file ?? AudioFile.open(url)
+        self.file = file
+        // One read can return fewer frames than the block size before the end of the file,
+        // so the end is the file's length, not a short read.
+        guard file.framePosition < file.length else { return nil }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: blockSize) else {
+            throw SoundIsolationError.invalidAudio("An audio buffer could not be allocated.")
         }
+        do {
+            try file.read(into: buffer, frameCount: blockSize)
+        } catch {
+            throw SoundIsolationError.invalidAudio(
+                "\(url.lastPathComponent) could not be read: \(error.localizedDescription)"
+            )
+        }
+        // The file states more frames than this read reached.
+        // To end the stream here would report a short output as a success.
+        guard buffer.frameLength > 0 else {
+            throw SoundIsolationError.invalidAudio(
+                "\(url.lastPathComponent) ended after \(file.framePosition) of its \(file.length) frames."
+            )
+        }
+        return AudioInput(owning: buffer)
+    }
+
+    /// Closes the file. A later ``read()`` would open it again, so the iterator stops calling.
+    func close() {
+        file?.close()
+        file = nil
     }
 }
 
