@@ -101,7 +101,7 @@ It copies the capture buffer so the audio system can reuse it.
 
 ```swift
 let (buffers, input) = AsyncStream<AudioInput>.makeStream()
-engine.inputNode.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
+engine.inputNode.installTap(onBus: 0, bufferSize: 4_096, format: nil) { @Sendable buffer, _ in
     input.yield(AudioInput(buffer: buffer))
 }
 try engine.start()
@@ -110,6 +110,10 @@ for try await audio in isolator.streamIsolation(of: buffers) {
     await player.scheduleBuffer(audio.buffer)
 }
 ```
+
+Mark the tap's closure `@Sendable`.
+The audio system calls it on its own thread,
+and a closure that inherits the main actor stops the app there.
 
 The isolator reads on demand without an input queue.
 If capture outpaces isolation, this `AsyncStream` buffers without limit.
@@ -138,7 +142,7 @@ and the isolated track's volume to `1 - level`.
 
 ### Stereo input and a mono engine
 
-When the input has more channels than the engine accepts,
+When the engine takes one channel and the input has more,
 the isolator averages them, processes the downmix once,
 and copies the result to each channel.
 Only the background retains the differences between channels.
@@ -299,11 +303,12 @@ File output began after about 0.6 s.
 Open streams share the 256 MB weights and process one window at a time
 to keep memory use bounded.
 
-By default, MLX caches freed GPU buffers without a limit.
+By default, MLX caches freed GPU buffers up to its memory limit,
+which depends on the Mac's memory.
 While a stream is open, the package limits the process-wide cache to 512 MiB
 unless the limit is already lower.
 It restores the previous limit afterward unless the app has set another one.
-Without the limit, a one-minute render used 5.5 GB and ran 3 percent faster.
+With MLX's default limit, a one-minute render used 5.5 GB and ran 3 percent faster.
 
 Metal compiles GPU kernels on first use and caches them per app.
 An empty cache added about 2.4 s.

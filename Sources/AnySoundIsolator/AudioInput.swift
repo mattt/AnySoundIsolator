@@ -9,10 +9,13 @@ import AVFoundation
 ///
 /// ```swift
 /// let (buffers, input) = AsyncStream<AudioInput>.makeStream()
-/// engine.inputNode.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
+/// engine.inputNode.installTap(onBus: 0, bufferSize: 4_096, format: nil) { @Sendable buffer, _ in
 ///     input.yield(AudioInput(buffer: buffer))
 /// }
 /// ```
+///
+/// Mark the closure `@Sendable`. The audio system calls it on a thread of its own,
+/// and a closure that takes the main actor from its context stops the program there.
 ///
 /// The type has the role of `AnalyzerInput` in the Speech framework.
 public struct AudioInput: @unchecked Sendable {
