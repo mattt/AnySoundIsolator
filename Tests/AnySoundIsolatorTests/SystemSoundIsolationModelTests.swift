@@ -14,6 +14,22 @@ import Testing
 struct SystemSoundIsolationModelTests {
     typealias Quality = SystemSoundIsolationModel.Quality
 
+    /// The isolator checks the sound before it asks for an executor.
+    /// A direct request for another sound is refused too, and not answered with a voice executor.
+    @Test func executorForAnotherSoundIsRefused() async throws {
+        let request = SoundIsolationRequest(
+            sound: SoundIsolator.Sound(rawValue: "music"),
+            sampleRate: 48_000,
+            channelCount: 1
+        )
+        await #expect {
+            _ = try await SystemSoundIsolationModel().makeExecutor(for: request)
+        } throws: { error in
+            guard case SoundIsolationError.unsupportedConfiguration(let message) = error else { return false }
+            return message.contains("music")
+        }
+    }
+
     @Test(arguments: Quality.allCases, [8_000.0, 16_000.0, 44_100.0, 48_000.0, 96_000.0])
     func monoOutputIsOnTheInputTimeline(quality: Quality, sampleRate: Double) async throws {
         let input = TestAudio.voice(seconds: 3, sampleRate: sampleRate)

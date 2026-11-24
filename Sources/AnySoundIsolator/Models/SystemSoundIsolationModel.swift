@@ -83,10 +83,17 @@ public struct SystemSoundIsolationModel: SoundIsolationModel {
     ///
     /// - Parameter request: The sound to isolate and the format of the input.
     /// - Throws: ``SoundIsolationError/unavailableModel(_:)`` when the system has no audio unit,
-    ///   ``SoundIsolationError/unsupportedConfiguration(_:)`` when the unit refuses the format,
+    ///   ``SoundIsolationError/unsupportedConfiguration(_:)`` when the model does not isolate the sound
+    ///   or the unit refuses the format,
     ///   or ``SoundIsolationError/backendFailure(underlying:)`` with the unit's status
     ///   when the unit fails to start for a format that it accepts.
     public func makeExecutor(for request: SoundIsolationRequest) async throws -> any SoundIsolationExecutor {
+        // The isolator checks the sound before it asks; a direct caller may not.
+        guard supportedSounds.contains(request.sound) else {
+            throw SoundIsolationError.unsupportedConfiguration(
+                "The model cannot isolate the sound \"\(request.sound.rawValue)\"."
+            )
+        }
         guard SoundIsolationUnit.isInstalled else {
             throw SoundIsolationError.unavailableModel(
                 "This system has no sound isolation audio unit."

@@ -225,6 +225,43 @@
             }
         }
 
+        /// MLX loads from a file URL only and stops the program for another URL,
+        /// so a location that is not a file URL must not read as available, even when its path names a file.
+        @Test func suppliedLocationThatIsNotAFileURLIsMissing() async throws {
+            try await withTemporaryDirectory { root in
+                let file = root.appending(path: "denoiser.safetensors")
+                try Data([0]).write(to: file)
+                let url = try #require(URL(string: "https://example.com\(file.path(percentEncoded: true))"))
+                #expect(FileManager.default.fileExists(atPath: url.path))
+                let model = InworldSoundIsolationModel(assets: .file(url))
+                #expect(model.availability == .unavailable(.assetsNotInstalled))
+                let request = SoundIsolationRequest(sound: .voice, sampleRate: 48_000, channelCount: 1)
+                await #expect {
+                    _ = try await model.makeExecutor(for: request)
+                } throws: { error in
+                    guard case SoundIsolationError.missingAssets(let message) = error else { return false }
+                    return message.contains("not a file URL")
+                }
+            }
+        }
+
+        /// A direct request for a sound that the model does not isolate is refused before any file is read.
+        @Test func executorForAnotherSoundIsRefused() async throws {
+            let request = SoundIsolationRequest(
+                sound: SoundIsolator.Sound(rawValue: "music"),
+                sampleRate: 48_000,
+                channelCount: 1
+            )
+            let file = URL(fileURLWithPath: "/nonexistent/denoiser.safetensors")
+            let model = InworldSoundIsolationModel(assets: .file(file))
+            await #expect {
+                _ = try await model.makeExecutor(for: request)
+            } throws: { error in
+                guard case SoundIsolationError.unsupportedConfiguration(let message) = error else { return false }
+                return message.contains("music")
+            }
+        }
+
         @Test func builtInCheckpointIsTheReleasedOfflineFile() {
             let model = InworldSoundIsolationModel()
             #expect(model.assets == .builtIn)

@@ -125,7 +125,10 @@
             )
         }
 
-        deinit {
+        // The last owner can be on any thread.
+        // An isolated deinitializer releases the compiled function and the weights on the thread of `InworldDevice`,
+        // where MLX traced the function, and in turn with the renders of other runtimes.
+        isolated deinit {
             BufferCacheLimit.release()
         }
 
@@ -146,8 +149,8 @@
 
     /// Limits MLX's cache of free GPU buffers while a runtime is loaded.
     ///
-    /// MLX keeps the buffers that a computation frees, without a limit by default.
-    /// On an M4 Max on 2026-11-20, one minute of audio had a peak memory footprint of 5.5 GB without a limit,
+    /// MLX keeps the buffers that a computation frees, up to a limit that is its memory limit by default.
+    /// On an M4 Max with 36 GB on 2026-11-20, one minute of audio had a peak memory footprint of 5.5 GB with that default,
     /// 4.3 GB and 3 percent more time with a limit of 512 MB, and 2.5 GB and 35 percent more time with no cache.
     /// The limit is one setting for the process, so the package lowers it only while a runtime is loaded,
     /// and then puts back the limit that it found.
@@ -194,7 +197,18 @@
             let load = SharedWork<InworldRuntime>()
         }
 
-        private nonisolated static let entries = Mutex<[URL: Entry]>([:])
+        /// A checkpoint file: its location and the identity of the file that is there.
+        ///
+        /// The identity is part of the key, so that a file which replaces another at the same location,
+        /// while a stream still uses the first, gets a runtime of its own.
+        private struct Key: Hashable {
+            let url: URL
+            let identity: InworldAssetStore.FileIdentity?
+        }
+
+        /// The table keeps one small entry for each location that the process loaded a file from,
+        /// and one more for each earlier file at a location while a stream still uses it.
+        private nonisolated static let entries = Mutex<[Key: Entry]>([:])
 
         /// Returns the runtime for a checkpoint file, which the streams that are open at the same time share.
         ///
@@ -207,22 +221,40 @@
         /// - Parameters:
         ///   - url: The checkpoint file.
         ///   - load: Loads the file. Tests replace it.
+        /// - Throws: ``SoundIsolationError/assetVerificationFailed(_:)`` when the file at the location changes
+        ///   during the load, or the error of the load.
         nonisolated static func shared(
             contentsOf url: URL,
             load: @escaping @Sendable (URL) async throws -> InworldRuntime = load(contentsOf:)
         ) async throws -> InworldRuntime {
             let key = key(for: url)
-            let (loaded, work) = entries.withLock { entries -> (InworldRuntime?, SharedWork<InworldRuntime>) in
+            let work = entries.withLock { entries in
+                // Remove the entries of earlier files at this location that nothing uses.
+                // A caller that holds such an entry and has not started to wait loads for itself alone.
+                for (other, entry) in entries where other.url == key.url && other != key {
+                    if entry.runtime == nil, !entry.load.isRunning, entry.load.callerCount == 0 {
+                        entries[other] = nil
+                    }
+                }
                 let entry = entries[key] ?? Entry()
                 entries[key] = entry
-                return (entry.runtime, entry.load)
+                return entry.load
             }
-            if let loaded { return loaded }
             return try await work.value {
+                // The work looks at the table itself.
+                // A caller that looked before it waited could miss a load that ended in between,
+                // and then load a second copy of the weights.
+                if let loaded = entries.withLock({ $0[key]?.runtime }) { return loaded }
                 // MLX selects the file format by the path extension,
                 // which the blob that a cache entry links to does not have.
                 let runtime = try await load(url)
-                // A caller that arrives after the load finds the runtime here.
+                // The key names the file that was at the location before the load, and MLX opened the location again.
+                // Weights of another file must not go under this key, where a later stream would find them.
+                guard Self.key(for: url) == key else {
+                    throw SoundIsolationError.assetVerificationFailed(
+                        "The checkpoint file \(url.lastPathComponent) changed while it was loaded."
+                    )
+                }
                 entries.withLock { $0[key]?.runtime = runtime }
                 return runtime
             }
@@ -233,13 +265,20 @@
             try await InworldRuntime(contentsOf: url)
         }
 
+        /// The number of entries in the table for the location of a file, for tests.
+        nonisolated static func entryCount(at url: URL) -> Int {
+            let location = key(for: url).url
+            return entries.withLock { entries in entries.keys.count { $0.url == location } }
+        }
+
         /// The number of callers that wait for the load of a file, for tests.
         nonisolated static func loadingCallerCount(contentsOf url: URL) -> Int {
             entries.withLock { $0[key(for: url)]?.load.callerCount ?? 0 }
         }
 
-        private nonisolated static func key(for url: URL) -> URL {
-            url.resolvingSymlinksInPath().standardizedFileURL
+        private nonisolated static func key(for url: URL) -> Key {
+            let file = url.resolvingSymlinksInPath().standardizedFileURL
+            return Key(url: file, identity: InworldAssetStore.fileIdentity(file))
         }
     }
 #endif

@@ -33,6 +33,8 @@ Install the Metal toolchain with `xcodebuild -downloadComponent MetalToolchain`.
 Command-line builds need SwiftPM support for MLX's Metal shaders.
 MLX Swift 0.31.6 and later need Swift 6.3.
 Xcode can also build MLX Swift 0.31.4.
+MLX Swift before 0.32.2 removes a compiled function from its cache without taking its evaluation lock.
+If your app runs other MLX code on another thread, use 0.32.2 or later.
 
 ## Installation
 
@@ -101,7 +103,7 @@ It copies the capture buffer so the audio system can reuse it.
 
 ```swift
 let (buffers, input) = AsyncStream<AudioInput>.makeStream()
-engine.inputNode.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
+engine.inputNode.installTap(onBus: 0, bufferSize: 4_096, format: nil) { @Sendable buffer, _ in
     input.yield(AudioInput(buffer: buffer))
 }
 try engine.start()
@@ -110,6 +112,10 @@ for try await audio in isolator.streamIsolation(of: buffers) {
     await player.scheduleBuffer(audio.buffer)
 }
 ```
+
+Mark the tap's closure `@Sendable`.
+The audio system can call it off the main thread,
+and a closure that inherits the main actor stops the app there.
 
 The isolator reads on demand without an input queue.
 If capture outpaces isolation, this `AsyncStream` buffers without limit.
@@ -138,7 +144,7 @@ and the isolated track's volume to `1 - level`.
 
 ### Stereo input and a mono engine
 
-When the input has more channels than the engine accepts,
+When the engine takes one channel and the input has more,
 the isolator averages them, processes the downmix once,
 and copies the result to each channel.
 Only the background retains the differences between channels.
@@ -299,11 +305,12 @@ File output began after about 0.6 s.
 Open streams share the 256 MB weights and process one window at a time
 to keep memory use bounded.
 
-By default, MLX caches freed GPU buffers without a limit.
+By default, MLX's limit for its cache of freed GPU buffers is its memory limit,
+which depends on the Mac's memory.
 While a stream is open, the package limits the process-wide cache to 512 MiB
 unless the limit is already lower.
 It restores the previous limit afterward unless the app has set another one.
-Without the limit, a one-minute render used 5.5 GB and ran 3 percent faster.
+With MLX's default limit, a one-minute render used 5.5 GB and ran 3 percent faster.
 
 Metal compiles GPU kernels on first use and caches them per app.
 An empty cache added about 2.4 s.
@@ -385,6 +392,7 @@ If files are missing, `makeExecutor(for:)` throws `SoundIsolationError.missingAs
 - Extract audio from video files before isolation.
 - The package hasn't been tested on a physical iPhone,
   and the Inworld model hasn't been tested on macOS 26.
+  The package's tests run the Inworld model with MLX Swift 0.33.0 only.
 
 ## Development
 

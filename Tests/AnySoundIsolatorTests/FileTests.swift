@@ -523,4 +523,34 @@ import Testing
         #expect(frames.allSatisfy { $0 <= 40_000 })
         #expect(frames.reduce(0, +) == 96_000)
     }
+
+    /// The copies of an iterator share one reader and its end state.
+    /// After one copy reaches the end or an error, another copy does not open the file again.
+    @Test func copiedFileIteratorDoesNotReadTheFileAgain() async throws {
+        let (directory, source, _) = try Self.workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var first = AudioFileBuffers.AsyncIterator(url: source, blockSize: 40_000)
+        var second = first
+        var frames: AVAudioFrameCount = 0
+        while let input = try await first.next() {
+            frames += input.buffer.frameLength
+        }
+        #expect(frames == 96_000)
+        let afterEnd = try await second.next()
+        #expect(afterEnd == nil)
+
+        var failing = AudioFileBuffers.AsyncIterator(url: directory.appending(path: "absent.wav"), blockSize: 40_000)
+        var copy = failing
+        do {
+            _ = try await failing.next()
+            Issue.record("A file that is absent must give an error.")
+        } catch {}
+        let afterError = try await copy.next()
+        #expect(afterError == nil)
+
+        // A new iterator of the sequence starts the file again.
+        var fresh = AudioFileBuffers(url: source, blockSize: 40_000).makeAsyncIterator()
+        let start = try await fresh.next()
+        #expect(start != nil)
+    }
 }

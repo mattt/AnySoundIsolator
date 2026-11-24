@@ -148,6 +148,7 @@
                 { $0.chunkSeconds = 0 }, { $0.overlapSeconds = -.infinity }, { $0.overlapSeconds = .nan },
                 { $0.numHeads = .max }, { $0.numHeads = 0 }, { $0.width = .max }, { $0.width = -512 },
                 { $0.sampleRate = 0 }, { $0.sampleRate = .max }, { $0.nFFT = .max }, { $0.nFFT = 1 },
+                { $0.nFFT -= 1 },
                 { $0.hopLength = 0 }, { $0.hopLength = .max }, { $0.hopLength = $0.nFFT }, { $0.mambaExpand = .max },
                 { $0.mambaExpand = 0 },
                 { $0.mambaConv = 0 }, { $0.mambaState = 0 }, { $0.mambaState = .max },
