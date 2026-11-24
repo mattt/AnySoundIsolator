@@ -68,20 +68,17 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
         public mutating func next(
             isolation actor: isolated (any Actor)? = #isolation
         ) async throws -> AudioInput? {
+            // The reader has the end state too, which the copies of an iterator share.
+            // This flag saves a finished iterator the wait for the reader's queue.
             guard !isFinished else { return nil }
-            let input: AudioInput?
             do {
-                input = try await reader.read()
+                let input = try await reader.read()
+                if input == nil { isFinished = true }
+                return input
             } catch {
                 isFinished = true
-                await reader.close()
                 throw error
             }
-            if input == nil {
-                isFinished = true
-                await reader.close()
-            }
-            return input
         }
     }
 }
@@ -96,11 +93,16 @@ public struct AudioFileBuffers: AsyncSequence, Sendable {
 /// The actor's executor is a serial dispatch queue,
 /// because the open, the read, and the decoding block their thread.
 /// The methods run in the caller's task, so they see its cancellation.
+///
+/// The actor also holds the end state.
+/// The copies of an iterator share one reader,
+/// so a copy cannot open the file again after another copy reached the end or an error.
 actor AudioFileReader {
     private let url: URL
     private let blockSize: AVAudioFrameCount
     private let queue: DispatchSerialQueue
     private var file: AVAudioFile?
+    private var isFinished = false
 
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
@@ -113,7 +115,20 @@ actor AudioFileReader {
     /// Reads the next block, or returns `nil` at the end of the file.
     ///
     /// The first call opens the file.
+    /// After the end of the file or an error, the reader closes the file, and each later call returns `nil`.
     func read() throws -> AudioInput? {
+        guard !isFinished else { return nil }
+        do {
+            let input = try readBlock()
+            if input == nil { finish() }
+            return input
+        } catch {
+            finish()
+            throw error
+        }
+    }
+
+    private func readBlock() throws -> AudioInput? {
         try Task.checkCancellation()
         let file = try self.file ?? AudioFile.open(url)
         self.file = file
@@ -140,8 +155,9 @@ actor AudioFileReader {
         return AudioInput(owning: buffer)
     }
 
-    /// Closes the file. A later ``read()`` would open it again, so the iterator stops calling.
-    func close() {
+    /// Ends the reading and closes the file.
+    private func finish() {
+        isFinished = true
         file?.close()
         file = nil
     }
