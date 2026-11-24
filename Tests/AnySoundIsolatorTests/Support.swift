@@ -112,6 +112,8 @@ enum TestAudio {
     ///
     /// On virtual machines with macOS 27, `AudioUnitInitialize` failed with status -10875
     /// (`kAudioUnitErr_FailedInitialization`) for two channels at 48 kHz with high quality.
+    /// In a CI run on 2026-11-24, it also failed for one channel with high quality, in several tests of one process,
+    /// so ``KnownStartFailure`` applies this function to each test that starts the unit.
     /// The package makes one call and then throws ``SoundIsolationError/backendFailure(underlying:)``.
     /// Where ``Machine/systemUnitCanDiffer`` is true, that error is a known issue that does not occur in every run.
     /// The cause is unknown. Any other error, and that error on any other machine, fails the test.
@@ -289,6 +291,30 @@ enum TestAudio {
         vDSP_rmsqv(samples, 1, &result, vDSP_Length(samples.count))
         return result
     }
+}
+
+/// Accepts a failed start of the system's audio unit in a test, or in each test of a suite,
+/// as ``TestAudio/withKnownStartFailure(sourceLocation:_:)`` does.
+///
+/// The trait has an effect only where ``Machine/systemUnitCanDiffer`` is true.
+/// On every other machine, a failed start fails the test.
+struct KnownStartFailure: TestTrait, SuiteTrait, TestScoping {
+    let isRecursive = true
+
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void
+    ) async throws {
+        try await TestAudio.withKnownStartFailure(sourceLocation: test.sourceLocation) {
+            try await function()
+        }
+    }
+}
+
+extension Trait where Self == KnownStartFailure {
+    /// Accepts a failed start of the system's audio unit on the machines where it is a known issue.
+    static var knownStartFailure: Self { Self() }
 }
 
 /// Facts about the machine that runs the tests.
