@@ -475,6 +475,14 @@ import Testing
         #expect(!(TestAudio.maximumDifference(nans, signal) <= 1e-4))
     }
 
+    /// A frame position is any 64-bit value. The end of the range stops at the largest one.
+    @Test func timeRangeAtTheLargestPositionDoesNotOverflow() throws {
+        let buffer = try TestAudio.buffer([[0, 0]], sampleRate: 48_000)
+        let audio = IsolatedAudio(buffer: buffer, source: buffer, framePosition: .max - 1)
+        #expect(audio.timeRange.start.value == .max - 1)
+        #expect(audio.timeRange.end.value == .max)
+    }
+
     /// A sample rate that is not a whole number keeps its fraction in the time range.
     /// A rate rounded to 44,101 Hz would be wrong by 20 ms after one hour.
     @Test func timeRangeKeepsAFractionalSampleRate() throws {

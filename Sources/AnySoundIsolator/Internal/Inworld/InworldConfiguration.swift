@@ -93,8 +93,10 @@
             }
             // With a hop as long as the window, the periodic Hann window's envelope is zero
             // at the start of each frame, and `torch.istft` refuses it.
+            // With an odd FFT size, the padding of half a window on each side is not a whole number of samples,
+            // and the frame count of this transform is one more than that of `torch.stft`.
             if !(1 ... 768_000).contains(sampleRate) || !(2 ... 1_048_576).contains(nFFT)
-                || !(1 ..< nFFT).contains(hopLength)
+                || !nFFT.isMultiple(of: 2) || !(1 ..< nFFT).contains(hopLength)
             {
                 throw refuse("sample rate \(sampleRate), FFT size \(nFFT), hop \(hopLength)")
             }

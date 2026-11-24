@@ -77,9 +77,11 @@ public struct IsolatedAudio: @unchecked Sendable {
     /// and each piece starts where the piece before it ends.
     public var timeRange: CMTimeRange {
         let sampleRate = buffer.format.sampleRate
+        // A position is any 64-bit value, so the end stops at the largest one.
+        let (sum, overflows) = framePosition.addingReportingOverflow(AVAudioFramePosition(buffer.frameLength))
         return CMTimeRange(
             start: Self.time(ofFrame: framePosition, sampleRate: sampleRate),
-            end: Self.time(ofFrame: framePosition + AVAudioFramePosition(buffer.frameLength), sampleRate: sampleRate)
+            end: Self.time(ofFrame: overflows ? .max : sum, sampleRate: sampleRate)
         )
     }
 

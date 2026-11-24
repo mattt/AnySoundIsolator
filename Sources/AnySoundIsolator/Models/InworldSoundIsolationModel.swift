@@ -26,6 +26,7 @@
     /// The network works in windows of 8 seconds that overlap by 2 seconds.
     /// The package places the windows as Inworld's offline render does:
     /// every window is a full one, and the last window ends at the end of the audio.
+    /// Audio that is shorter than one window is one short window.
     /// A stream gives the same frames as a file with the same audio, and it gives them later:
     /// the first frames after 8 seconds of input, then 6 seconds for each further 6 seconds of input,
     /// and the last frames after the input ends.
@@ -36,9 +37,11 @@
     /// On an Apple M4 Max on 2026-11-20, it isolated about 10 seconds of audio in each second,
     /// and the process had a peak memory footprint of 4.2 to 4.6 GB, whatever the length of the audio.
     /// Streams that are open at the same time share the loaded weights and render their windows in turn.
-    /// While a stream is open, the model limits MLX's cache of free GPU buffers to 512 MB.
+    /// While a stream is open, the model limits MLX's cache of free GPU buffers to 512 MB,
+    /// unless the limit is already lower.
     /// The limit is one setting for the process, so it also applies to other MLX code in the app
-    /// during that time; the model puts the earlier limit back when its last stream ends.
+    /// during that time. When its last stream ends, the model puts the earlier limit back,
+    /// unless the app set another limit in the meantime.
     ///
     /// The first render in a process takes longer than the others,
     /// because Metal compiles the network's GPU kernels or reads them from its cache for the app.
@@ -126,9 +129,21 @@
             }
         }
 
+        /// What is wrong with the location of a file that the app supplies.
+        private var missingFileDescription: String {
+            file.isFileURL
+                ? "The Inworld checkpoint is not at \(file.path)."
+                : "The location of the Inworld checkpoint, \(file.absoluteString), is not a file URL."
+        }
+
         /// Whether the device can run the model and the checkpoint file is installed.
         ///
         /// The check uses no network and computes no digest.
+        /// It reads the record of the verification, a file of less than 1 KB, and the attributes of the checkpoint file.
+        /// One read took about 0.07 milliseconds on an Apple M4 Max on 2026-11-24,
+        /// so the property is synchronous, as the availability of the other models is.
+        ///
+        /// A location for ``Assets/file(_:)`` that is not a file URL reads as not installed.
         public var availability: Availability<UnavailableReason> {
             #if arch(arm64)
                 switch assets {
@@ -136,7 +151,9 @@
                     if store.isInstalling(checkpoint) { return .unavailable(.assetsInstalling) }
                     return store.status(of: checkpoint) == .installed ? .available : .unavailable(.assetsNotInstalled)
                 case .file(let url):
-                    return InworldAssetStore.fileIdentity(url) != nil ? .available : .unavailable(.assetsNotInstalled)
+                    // MLX loads from a file URL only, and it stops the program for another URL.
+                    return url.isFileURL && InworldAssetStore.fileIdentity(url) != nil
+                        ? .available : .unavailable(.assetsNotInstalled)
                 }
             #else
                 return .unavailable(.unsupportedHardware)
@@ -162,7 +179,7 @@
                 break
             }
             guard case .builtIn = assets else {
-                throw SoundIsolationError.missingAssets("The Inworld checkpoint is not at \(file.path).")
+                throw SoundIsolationError.missingAssets(missingFileDescription)
             }
             let checkpoint = checkpoint
             let store = store
@@ -182,8 +199,15 @@
         /// - Parameter request: The sound to isolate and the format of the input.
         /// - Throws: ``SoundIsolationError/missingAssets(_:)`` when the checkpoint file is not installed,
         ///   ``SoundIsolationError/unavailableModel(_:)`` when the device cannot run the model,
-        ///   or ``SoundIsolationError/unsupportedConfiguration(_:)`` when the file is not the offline checkpoint.
+        ///   or ``SoundIsolationError/unsupportedConfiguration(_:)`` when the model does not isolate the sound
+        ///   or the file is not the offline checkpoint.
         public func makeExecutor(for request: SoundIsolationRequest) async throws -> any SoundIsolationExecutor {
+            // The isolator checks the sound before it asks; a direct caller may not.
+            guard supportedSounds.contains(request.sound) else {
+                throw SoundIsolationError.unsupportedConfiguration(
+                    "The model cannot isolate the sound \"\(request.sound.rawValue)\"."
+                )
+            }
             switch availability {
             case .available:
                 break
@@ -193,7 +217,7 @@
                 throw SoundIsolationError.missingAssets(
                     assets == .builtIn
                         ? "The Inworld checkpoint is not installed. Install it with assetInstallationRequest()."
-                        : "The Inworld checkpoint is not at \(file.path)."
+                        : missingFileDescription
                 )
             }
             return InworldSoundIsolationExecutor(runtime: try await InworldRuntime.shared(contentsOf: file))
