@@ -25,8 +25,8 @@ struct SystemSoundIsolationModelTests {
         await #expect {
             _ = try await SystemSoundIsolationModel().makeExecutor(for: request)
         } throws: { error in
-            guard case SoundIsolationError.unsupportedConfiguration = error else { return false }
-            return true
+            guard case SoundIsolationError.unsupportedConfiguration(let message) = error else { return false }
+            return message.contains("music")
         }
     }
 

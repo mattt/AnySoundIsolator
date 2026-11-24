@@ -14,7 +14,7 @@ import AVFoundation
 /// }
 /// ```
 ///
-/// Mark the closure `@Sendable`. The audio system calls it on a thread of its own,
+/// Mark the closure `@Sendable`. The audio system can call it on a thread that is not the main thread,
 /// and a closure that takes the main actor from its context stops the program there.
 ///
 /// The type has the role of `AnalyzerInput` in the Speech framework.

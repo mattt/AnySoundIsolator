@@ -287,6 +287,46 @@
                 let second = try await InworldRuntime.shared(contentsOf: url, load: load)
                 #expect(second !== first)
                 #expect(loads.withLock { $0 } == 2)
+                #expect(InworldRuntime.entryCount(at: url) == 2)
+            }
+        }
+
+        /// The table does not keep an entry for each file that ever was at a location:
+        /// a new file there removes the entries of earlier files that no stream uses.
+        @Test func entriesOfEarlierFilesAtALocationAreRemoved() async throws {
+            try await withTemporaryDirectory { directory in
+                let url = directory.appending(path: "weights.safetensors")
+                let load: @Sendable (URL) async throws -> InworldRuntime = { _ in
+                    await InworldRuntime(sampleRate: 48_000, chunk: 8, overlap: 2) { $0 }
+                }
+                var kept: InworldRuntime?
+                for size in 1 ... 4 {
+                    try Data(repeating: 1, count: size).write(to: url, options: .atomic)
+                    // Each runtime before this one has no owner now.
+                    kept = try await InworldRuntime.shared(contentsOf: url, load: load)
+                }
+                #expect(kept != nil)
+                // The fourth file's entry, and the third's, whose runtime still had its owner during the fourth call.
+                #expect(InworldRuntime.entryCount(at: url) == 2)
+            }
+        }
+
+        /// MLX opens the location again after the key is made.
+        /// A file that changes in between is refused, and its weights do not go under the key of the earlier file.
+        @Test func fileThatChangesDuringTheLoadIsRefused() async throws {
+            try await withTemporaryDirectory { directory in
+                let url = directory.appending(path: "weights.safetensors")
+                try Data([1]).write(to: url)
+                let load: @Sendable (URL) async throws -> InworldRuntime = { url in
+                    try Data([1, 2]).write(to: url, options: .atomic)
+                    return await InworldRuntime(sampleRate: 48_000, chunk: 8, overlap: 2) { $0 }
+                }
+                await #expect {
+                    _ = try await InworldRuntime.shared(contentsOf: url, load: load)
+                } throws: { error in
+                    guard case SoundIsolationError.assetVerificationFailed = error else { return false }
+                    return true
+                }
             }
         }
 
@@ -295,8 +335,9 @@
         @Test func runtimeIsReleasedOnTheDeviceThread() async throws {
             let log = ThreadLog()
             do {
-                let mark = ReleaseMark(log: log)
-                let runtime = await InworldRuntime(sampleRate: 48_000, chunk: 4, overlap: 1) { samples in
+                // The closure is the mark's only owner, so the mark is released with the runtime.
+                let runtime = await InworldRuntime(sampleRate: 48_000, chunk: 4, overlap: 1) {
+                    [mark = ReleaseMark(log: log)] samples in
                     withExtendedLifetime(mark) { samples }
                 }
                 #expect(runtime.chunk == 4)

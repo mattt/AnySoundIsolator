@@ -139,8 +139,9 @@
         /// Whether the device can run the model and the checkpoint file is installed.
         ///
         /// The check uses no network and computes no digest.
-        /// It reads the record of the verification, a file of less than 1 KB, and the attributes of the checkpoint file.
-        /// One read took about 0.07 milliseconds on an Apple M4 Max on 2026-11-24,
+        /// For the built-in checkpoint, it reads the small record of the verification
+        /// and the attributes of the checkpoint file.
+        /// One such read took about 0.07 milliseconds on an Apple M4 Max on 2026-11-24,
         /// so the property is synchronous, as the availability of the other models is.
         ///
         /// A location for ``Assets/file(_:)`` that is not a file URL reads as not installed.

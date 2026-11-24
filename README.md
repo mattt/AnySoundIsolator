@@ -33,6 +33,8 @@ Install the Metal toolchain with `xcodebuild -downloadComponent MetalToolchain`.
 Command-line builds need SwiftPM support for MLX's Metal shaders.
 MLX Swift 0.31.6 and later need Swift 6.3.
 Xcode can also build MLX Swift 0.31.4.
+MLX Swift before 0.32.2 removes a compiled function from its cache without taking its evaluation lock.
+If your app runs other MLX code on another thread, use 0.32.2 or later.
 
 ## Installation
 
@@ -112,7 +114,7 @@ for try await audio in isolator.streamIsolation(of: buffers) {
 ```
 
 Mark the tap's closure `@Sendable`.
-The audio system calls it on its own thread,
+The audio system can call it off the main thread,
 and a closure that inherits the main actor stops the app there.
 
 The isolator reads on demand without an input queue.
@@ -303,7 +305,7 @@ File output began after about 0.6 s.
 Open streams share the 256 MB weights and process one window at a time
 to keep memory use bounded.
 
-By default, MLX caches freed GPU buffers up to its memory limit,
+By default, MLX's limit for its cache of freed GPU buffers is its memory limit,
 which depends on the Mac's memory.
 While a stream is open, the package limits the process-wide cache to 512 MiB
 unless the limit is already lower.
@@ -390,6 +392,7 @@ If files are missing, `makeExecutor(for:)` throws `SoundIsolationError.missingAs
 - Extract audio from video files before isolation.
 - The package hasn't been tested on a physical iPhone,
   and the Inworld model hasn't been tested on macOS 26.
+  The package's tests run the Inworld model with MLX Swift 0.33.0 only.
 
 ## Development
 
