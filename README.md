@@ -41,7 +41,7 @@ If your app runs other MLX code on another thread, use 0.32.2 or later.
 Add the package to your `Package.swift`.
 
 ```swift
-.package(url: "https://github.com/mattt/AnySoundIsolator", branch: "main")
+.package(url: "https://github.com/mattt/AnySoundIsolator", from: "0.1.0")
 ```
 
 With the default traits, the library has no dependencies.
@@ -50,7 +50,7 @@ Enable the `MLX` trait to add the Inworld model,
 and [swift-huggingface](https://github.com/huggingface/swift-huggingface).
 
 ```swift
-.package(url: "https://github.com/mattt/AnySoundIsolator", branch: "main", traits: ["MLX"])
+.package(url: "https://github.com/mattt/AnySoundIsolator", from: "0.1.0", traits: ["MLX"])
 ```
 
 ## Usage
